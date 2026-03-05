@@ -38,9 +38,6 @@
 #define PIPELINE_VERT 0
 #define PIPELINE_MESH 1
 #define PIPELINE_RTX 2
-#define PIPELINE_HYBRID 3        // Hybrid rendering: raster primary rays (3DGS), raytrace secondary rays (3DGRT)
-#define PIPELINE_MESH_3DGUT 4    // 3DGUT (Unscented Transform) rasterization using mesh shaders
-#define PIPELINE_HYBRID_3DGUT 5  // Hybrid rendering: raster primary rays (3DGUT), raytrace secondary rays (3DGRT)
 
 // visualization mode
 #define VISUALIZE_FINAL 0
@@ -97,19 +94,6 @@
 #define BINDING_RTX_PAYLOAD_BUFFER 18
 #define BINDING_MESH_DESCRIPTORS 19
 #define BINDING_LIGHT_SET 20
-
-// bindings for set 1 of RTX
-#define RTX_BINDING_OUTIMAGE 0        // Ray tracer output image
-#define RTX_BINDING_TLAS_SPLATS 1     // Top-level acceleration structure for splats
-#define RTX_BINDING_TLAS_MESH 2       // Top-level acceleration structure for meshes
-#define RTX_BINDING_PAYLOAD_BUFFER 3  // the alternative to payload stack (less efficient)
-#define RTX_BINDING_AUX1 4            // Ray tracer auxiliary output image, when using hybrid mode + temporal sampling
-#define RTX_BINDING_OUTDEPTH 5        // depth buffer
-
-// Temporal sampling mode
-#define TEMPORAL_SAMPLING_AUTO 0  // Detects automatically if TS is needed for best visual results (e.g. if DoF is on)
-#define TEMPORAL_SAMPLING_ENABLED 1   // Force enabled
-#define TEMPORAL_SAMPLING_DISABLED 2  // Force disabled
 
 // bindings for set 0 of Post Process (0 is reserved for BINDING_FRAME_INFO_UBO)
 #define POST_BINDING_MAIN_IMAGE 1  // the image that is presented

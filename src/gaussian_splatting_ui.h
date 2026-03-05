@@ -104,7 +104,7 @@ namespace vk_gaussian_splatting {
 class GaussianSplattingUI : public GaussianSplatting, public nvapp::IAppElement
 {
 public:  // Methods specializing IAppElement
-  GaussianSplattingUI(nvutils::ProfilerManager* profilerManager, nvutils::ParameterRegistry* parameterRegistry, bool* benchmarkEnabled);
+  GaussianSplattingUI();
 
   ~GaussianSplattingUI() override;
 
@@ -114,8 +114,6 @@ public:  // Methods specializing IAppElement
 
   void onResize(VkCommandBuffer cmd, const VkExtent2D& size) override;
 
-  void onPreRender() override;
-
   void onRender(VkCommandBuffer cmd) override;
 
   void onUIRender() override;
@@ -124,42 +122,14 @@ public:  // Methods specializing IAppElement
 
   void onFileDrop(const std::filesystem::path& filename) override;
 
-  // handle recent files save/load at imgui level
-  void guiRegisterIniFileHandlers();
-
 private:
-  void guiDrawAssetsWindow(void);
-  void guiDrawRendererTree();
-  void guiDrawCameraTree();
-  void guiDrawLightTree();
-  void guiDrawRadianceFieldsTree();
-  void guiDrawObjectTree();
-
-  void guiDrawPropertiesWindow(void);
-  void guiDrawRendererProperties();
-  void guiDrawSplatSetProperties();
-  void guiDrawMeshTransformProperties();
-  void guiDrawMeshMaterialProperties();
-  void guiDrawCameraProperties();
-  void guiDrawNavigationProperties();
-  void guiDrawLightProperties();
 
   void guiDrawRendererStatisticsWindow();
 
-  void guiDrawMemoryStatisticsWindow(void);
-
-  void guiDrawDebugWindow(void);
-
-  void guiDrawFooterBar(void);
 
   bool guiGetTransform(glm::vec3& scale, glm::vec3& rotation, glm::vec3& translation, glm::mat4& transform, glm::mat4& transformInv, bool disabled /*=false*/);
 
-  // methods to handle recent files in file menu
-  void guiAddToRecentFiles(std::filesystem::path filePath, int historySize = 20);
-  void guiAddToRecentProjects(std::filesystem::path filePath, int historySize = 20);
-
-  bool loadProjectIfNeeded();
-  bool saveProject(std::string path);
+    bool loadProjectIfNeeded();
 
 private:
   // hide/show ui elements
@@ -169,8 +139,6 @@ private:
 
   std::shared_ptr<nvapp::ElementProfiler::ViewSettings> m_profilerViewSettings;
 
-  // benchmark mode (enabled by command line), loadings will be synchronous and vsync off
-  bool* m_pBenchmarkEnabled = {};
   // screenshot file name (used by benchmark)
   std::filesystem::path m_screenshotFilename;
 
@@ -222,8 +190,6 @@ private:
   bool loadingProject = false;
   json data;
 
-  // Debuging
-  void dumpSplat(uint32_t splatIdx);
 };
 
 }  // namespace vk_gaussian_splatting

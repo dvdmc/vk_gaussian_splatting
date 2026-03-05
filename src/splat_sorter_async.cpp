@@ -29,9 +29,8 @@
 
 using namespace vk_gaussian_splatting;
 
-bool SplatSorterAsync::initialize(nvutils::ProfilerTimeline* profiler)
+bool SplatSorterAsync::initialize()
 {
-  m_profiler = profiler;
 
   // original state shall be shutdown
   std::unique_lock<std::mutex> lock(m_mutex);
@@ -89,12 +88,10 @@ bool SplatSorterAsync::initialize(nvutils::ProfilerTimeline* profiler)
 
 bool SplatSorterAsync::innerSort()
 {
-  assert(m_profiler);
 
   if(m_positions == nullptr)
     return false;
 
-  auto timer = m_profiler->asyncBeginSection("CPU Dist");
 
   // we do the sorting if needed
   // find plane passing through COP and with normal dir.
@@ -123,17 +120,11 @@ bool SplatSorterAsync::innerSort()
   }
   END_PAR_LOOP()
 
-  m_profiler->asyncEndSection(timer);
-
-  timer = m_profiler->asyncBeginSection("CPU Sort");
-
   // comparison function working on the data <dist,idex>
   auto compare = [&](size_t i, size_t j) { return distances[i] > distances[j]; };
 
   // Sorting the array with respect to distance keys
   std::sort(std::execution::par_unseq, m_indices.begin(), m_indices.end(), compare);
-
-  m_profiler->asyncEndSection(timer);
 
   return true;
 }

@@ -39,10 +39,8 @@
 
 namespace vk_gaussian_splatting {
 
-GaussianSplatting::GaussianSplatting(nvutils::ProfilerManager* profilerManager, nvutils::ParameterRegistry* parameterRegistry)
-    : m_profilerManager(profilerManager)
-    , m_parameterRegistry(parameterRegistry)
-    , cameraManip(std::make_shared<nvutils::CameraManipulator>()) {
+GaussianSplatting::GaussianSplatting()
+    : cameraManip(std::make_shared<nvutils::CameraManipulator>()) {
 
     };
 
@@ -58,13 +56,9 @@ void GaussianSplatting::onAttach(nvapp::Application* app)
   m_app    = app;
   m_device = m_app->getDevice();
 
-  // profiling
-  m_profilerTimeline = m_profilerManager->createTimeline({.name = "Primary Timeline"});
-  m_profilerGpuTimer.init(m_profilerTimeline, m_app->getDevice(), m_app->getPhysicalDevice(), m_app->getQueue(0).familyIndex, false);
-
   // starts the asynchronous services
   m_plyLoader.initialize();
-  m_cpuSorter.initialize(m_profilerTimeline);
+  m_cpuSorter.initialize();
 
   // Memory allocator
   m_alloc.init(VmaAllocatorCreateInfo{
@@ -74,9 +68,6 @@ void GaussianSplatting::onAttach(nvapp::Application* app)
       .instance         = app->getInstance(),
       .vulkanApiVersion = VK_API_VERSION_1_4,
   });
-
-  // DEBUG: uncomment and set id to find object leak
-  // m_alloc.setLeakID(70);
 
   // set up buffer uploading utility
   m_uploader.init(&m_alloc, true);
@@ -136,9 +127,6 @@ void GaussianSplatting::onDetach()
   // release application wide related resources
   m_splatSetVk.deinit();
   m_meshSetVk.deinit();
-  m_profilerGpuTimer.deinit();
-  m_profilerManager->destroyTimeline(m_profilerTimeline);
-  m_profilerTimeline = nullptr;
   m_gBuffers.deinit();
   m_samplerPool.releaseSampler(m_sampler);
   m_samplerPool.deinit();
@@ -150,14 +138,8 @@ void GaussianSplatting::onResize(VkCommandBuffer cmd, const VkExtent2D& viewport
 {
   m_viewSize = {viewportSize.width, viewportSize.height};
   NVVK_CHECK(m_gBuffers.update(cmd, viewportSize));
-  updateRtDescriptorSet();
   updateDescriptorSetPostProcessing();
   resetFrameCounter();
-}
-
-void GaussianSplatting::onPreRender()
-{
-  m_profilerTimeline->frameAdvance();
 }
 
 void GaussianSplatting::onRender(VkCommandBuffer cmd)
@@ -176,40 +158,9 @@ void GaussianSplatting::onRender(VkCommandBuffer cmd)
     splatCount = (uint32_t)m_splatSet.size();
   }
 
-  //////////////////
-  // Full raytrace pipeline
-
-  if(m_shaders.valid && splatCount && prmSelectedPipeline == PIPELINE_RTX)
-  {
-    if(!m_splatSetVk.rtxValid)
-    {
-      // let's switch back to raster, RTX is KO
-      prmSelectedPipeline = PIPELINE_MESH;
-      return;
-    }
-
-    if(prmRtx.temporalSampling && !updateFrameCounter())
-      return;
-
-    collectReadBackValuesIfNeeded();
-
-    updateAndUploadFrameInfoUBO(cmd, splatCount);
-
-    raytrace(cmd);
-
-    readBackIndirectParametersIfNeeded(cmd);
-
-    updateRenderingMemoryStatistics(cmd, splatCount);
-
-    // Attention: early return
-    return;
-  }
-
   ///////////////////
   // From this point we are using full raster or hybrid.
 
-  if(prmRtx.temporalSampling && !updateFrameCounter())
-    return;
 
   // Handle device-host data update and splat sorting if a scene exist
   if(m_shaders.valid && splatCount)
@@ -222,10 +173,6 @@ void GaussianSplatting::onRender(VkCommandBuffer cmd)
 
     if(prmRaster.sortingMethod == SORTING_GPU_SYNC_RADIX)
     {
-      // remove eventual async CPU sorting timers
-      // so that it will not appear since not sorting on CPU anymore
-      m_profilerTimeline->asyncRemoveTimer("CPU Dist");
-      m_profilerTimeline->asyncRemoveTimer("CPU Sort");
       // now work on GPU
       processSortingOnGPU(cmd, splatCount);
     }
@@ -235,27 +182,19 @@ void GaussianSplatting::onRender(VkCommandBuffer cmd)
     }
   }
 
-  // In which color buffer are we going to render ?
+  // In which color buffer are we going to render ? // TODO Q: Is the AUX1 needed if not RTX?
   uint32_t colorBufferId = COLOR_MAIN;
-  if(prmRtx.temporalSampling && prmFrame.frameSampleId > 0)
-    colorBufferId = COLOR_AUX1;
-
-  // raytrace the mesh depth using primary rays if needed
-  bool raytraceMeshDepth = m_shaders.valid && !m_meshSetVk.instances.empty() && prmSelectedPipeline == PIPELINE_HYBRID_3DGUT;
+  // if(prmRtx.temporalSampling && prmFrame.frameSampleId > 0)
+  //   colorBufferId = COLOR_AUX1;
 
   nvvk::cmdImageMemoryBarrier(cmd, {m_gBuffers.getDepthImage(),
                                     VK_IMAGE_LAYOUT_UNDEFINED,  // or previous
                                     VK_IMAGE_LAYOUT_GENERAL,    // for ray tracing writes
                                     {VK_IMAGE_ASPECT_DEPTH_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS}});
 
-  if(raytraceMeshDepth)
-  {
-    raytrace(cmd, true);
-  }
 
   // Drawing the primitives in the G-Buffer
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "Rasterization");
 
     const VkExtent2D& viewportSize = m_app->getViewportSize();
     const VkViewport  viewport{0.0F, 0.0F, float(viewportSize.width), float(viewportSize.height), 0.0F, 1.0F};
@@ -265,10 +204,7 @@ void GaussianSplatting::onRender(VkCommandBuffer cmd)
     colorAttachment.imageView                 = m_gBuffers.getColorImageView(colorBufferId);
     colorAttachment.clearValue                = {m_clearColor};
     VkRenderingAttachmentInfo depthAttachment = DEFAULT_VkRenderingAttachmentInfo;
-    if(raytraceMeshDepth)
-    {
-      depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;  // <-- preserve existing depth
-    }
+
     depthAttachment.imageView  = m_gBuffers.getDepthImageView();
     depthAttachment.clearValue = {.depthStencil = DEFAULT_VkClearDepthStencilValue};
 
@@ -293,7 +229,7 @@ void GaussianSplatting::onRender(VkCommandBuffer cmd)
     vkCmdSetScissorWithCount(cmd, 1, &scissor);
 
     // mesh first so that occluded splats fragments will be discarded by depth test
-    if(m_shaders.valid && !m_meshSetVk.instances.empty() && !raytraceMeshDepth)
+    if(m_shaders.valid && !m_meshSetVk.instances.empty())
     {
       drawMeshPrimitives(cmd);
     }
@@ -315,19 +251,6 @@ void GaussianSplatting::onRender(VkCommandBuffer cmd)
                                       {VK_IMAGE_ASPECT_DEPTH_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS}});
   }
 
-  // raytrace the secondary rays if needed
-  if(m_shaders.valid && splatCount && m_splatSetVk.rtxValid && !m_meshSetVk.instances.empty()
-     && (prmSelectedPipeline == PIPELINE_HYBRID || prmSelectedPipeline == PIPELINE_HYBRID_3DGUT))
-  {
-    raytrace(cmd);
-  }
-
-  // Perform post processings if needed
-  if(prmRtx.temporalSampling && prmFrame.frameSampleId > 0)
-  {
-    postProcess(cmd);
-  }
-
   //
   readBackIndirectParametersIfNeeded(cmd);
 
@@ -336,32 +259,6 @@ void GaussianSplatting::onRender(VkCommandBuffer cmd)
 
 void GaussianSplatting::processUpdateRequests(void)
 {
-
-  // Automatic and Sanity settings depending in pipeline
-  if(prmSelectedPipeline != PIPELINE_RTX && prmSelectedPipeline != PIPELINE_HYBRID_3DGUT && prmSelectedPipeline != PIPELINE_MESH_3DGUT)
-  {
-    prmRtx.temporalSampling = false;
-    // prmRtx.dofEnabled       = false;
-  }
-  else
-  {
-    if(prmRtx.temporalSamplingMode == TEMPORAL_SAMPLING_AUTO && m_cameraSet.getCamera().dofEnabled)
-    {
-      prmRtx.temporalSampling = true;
-    }
-    else
-    {
-      prmRtx.temporalSampling = (prmRtx.temporalSamplingMode == TEMPORAL_SAMPLING_ENABLED);
-    }
-  }
-
-  // process delayed requests
-  if((prmSelectedPipeline == PIPELINE_RTX || prmSelectedPipeline == PIPELINE_HYBRID || prmSelectedPipeline == PIPELINE_HYBRID_3DGUT)
-     && m_requestDelayedUpdateSplatAs)
-  {
-    m_requestUpdateSplatAs        = true;
-    m_requestDelayedUpdateSplatAs = false;
-  }
 
   bool needUpdate = m_requestUpdateSplatData || m_requestUpdateSplatAs || m_requestUpdateMeshData
                     || m_requestUpdateShaders || m_requestUpdateLightsBuffer || m_requestDeleteSelectedMesh;
@@ -385,15 +282,6 @@ void GaussianSplatting::processUpdateRequests(void)
       m_splatSetVk.deinitDataStorage();
       m_splatSetVk.initDataStorage(m_splatSet, prmData.dataStorage, prmData.shFormat);
     }
-    if(m_requestUpdateSplatData || m_requestUpdateSplatAs)
-    {
-      // RTX specific
-      m_splatSetVk.rtxDeinitAccelerationStructures();
-      m_splatSetVk.rtxDeinitSplatModel();
-      m_splatSetVk.rtxInitSplatModel(m_splatSet, prmRtxData.useTlasInstances, prmRtxData.useAABBs, prmRtxData.compressBlas,
-                                     prmRtx.kernelDegree, prmRtx.kernelMinResponse, prmRtx.kernelAdaptiveClamping);
-      m_splatSetVk.rtxInitAccelerationStructures(m_splatSet);
-    }
 
     if(m_requestUpdateMeshData || m_requestDeleteSelectedMesh)
     {
@@ -403,16 +291,12 @@ void GaussianSplatting::processUpdateRequests(void)
         m_selectedItemIndex = -1;
       }
 
-      m_meshSetVk.rtxDeinitAccelerationStructures();
       m_meshSetVk.updateObjDescriptionBuffer();
-      m_meshSetVk.rtxInitAccelerationStructures();
     }
 
     if(initShaders())
     {
       initPipelines();
-      initRtDescriptorSet();
-      initRtPipeline();
       initDescriptorSetPostProcessing();
       initPipelinePostProcessing();
     }
@@ -436,7 +320,6 @@ void GaussianSplatting::updateAndUploadFrameInfoUBO(VkCommandBuffer cmd, const u
 {
   NVVK_DBG_SCOPE(cmd);
 
-  auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "UBO update");
 
   Camera camera = m_cameraSet.getCamera();
 
@@ -468,8 +351,7 @@ void GaussianSplatting::updateAndUploadFrameInfoUBO(VkCommandBuffer cmd, const u
   prmFrame.basisViewport           = glm::vec2(1.0f / m_viewSize.x, 1.0f / m_viewSize.y);
   prmFrame.inverseFocalAdjustment  = 1.0f / focalAdjustment;
 
-  if(camera.model == CAMERA_FISHEYE && prmSelectedPipeline != PIPELINE_VERT && prmSelectedPipeline != PIPELINE_MESH
-     && prmSelectedPipeline != PIPELINE_HYBRID)
+  if(camera.model == CAMERA_FISHEYE && prmSelectedPipeline != PIPELINE_VERT && prmSelectedPipeline != PIPELINE_MESH)
   {
     // FISHEYE focal
     prmFrame.focal = glm::vec2(1.0, -1.0) * prmFrame.viewport / prmFrame.fovRad;
@@ -555,7 +437,6 @@ void GaussianSplatting::tryConsumeAndUploadCpuSortingResult(VkCommandBuffer cmd,
 
   // 2. upload to GPU is needed
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "Copy indices to GPU");
 
     if(newIndexAvailable)
     {
@@ -602,8 +483,6 @@ void GaussianSplatting::processSortingOnGPU(VkCommandBuffer cmd, const uint32_t 
 
   // 2. invoke the distance compute shader
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "GPU Dist");
-
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipelineGsDistCull);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
 
@@ -624,8 +503,6 @@ void GaussianSplatting::processSortingOnGPU(VkCommandBuffer cmd, const uint32_t 
 
   // 3. invoke the radix sort from vrdx lib
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "GPU Sort");
-
     vrdxCmdSortKeyValueIndirect(cmd, m_gpuSorter, splatCount, m_indirect.buffer,
                                 offsetof(shaderio::IndirectParams, instanceCount), m_splatDistancesDevice.buffer, 0,
                                 m_splatIndicesDevice.buffer, 0, m_vrdxStorageDevice.buffer, 0, 0, 0);
@@ -683,10 +560,8 @@ void GaussianSplatting::drawSplatPrimitives(VkCommandBuffer cmd, const uint32_t 
   {  // in mesh pipeline mode or in hybrid mode
     // Pipeline using mesh shader
 
-    if(prmSelectedPipeline == PIPELINE_MESH || prmSelectedPipeline == PIPELINE_HYBRID)
+    if(prmSelectedPipeline == PIPELINE_MESH)
       vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipelineGsMesh);
-    if(prmSelectedPipeline == PIPELINE_MESH_3DGUT || prmSelectedPipeline == PIPELINE_HYBRID_3DGUT)
-      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline3dgutMesh);
 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
 
@@ -753,8 +628,6 @@ void GaussianSplatting::readBackIndirectParametersIfNeeded(VkCommandBuffer cmd)
 
   if(m_indirectReadbackHost.buffer != VK_NULL_HANDLE && prmRaster.sortingMethod == SORTING_GPU_SYNC_RADIX)
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "Indirect readback");
-
     // ensures m_indirect buffer modified by GPU sort is available for transfer
     VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     barrier.srcAccessMask   = VK_ACCESS_SHADER_WRITE_BIT;
@@ -836,10 +709,7 @@ void GaussianSplatting::deinitAll()
   deinitScene();
   m_splatSetVk.resetTransform();
   m_splatSetVk.deinitDataStorage();
-  m_splatSetVk.rtxDeinitSplatModel();
-  m_splatSetVk.rtxDeinitAccelerationStructures();
   m_meshSetVk.deinitDataStorage();
-  m_meshSetVk.rtxDeinitAccelerationStructures();
   m_lightSet.deinit();
   m_cameraSet.deinit();
   deinitShaders();
@@ -876,13 +746,10 @@ bool GaussianSplatting::initAll()
   initPipelines();
 
   // RTX specifics
-  m_splatSetVk.rtxInitSplatModel(m_splatSet, prmRtxData.useTlasInstances, prmRtxData.useAABBs, prmRtxData.compressBlas,
-                                 prmRtx.kernelDegree, prmRtx.kernelMinResponse, prmRtx.kernelAdaptiveClamping);
+  // m_splatSetVk.rtxInitSplatModel(m_splatSet, prmRtxData.useTlasInstances, prmRtxData.useAABBs, prmRtxData.compressBlas,
+  //                                prmRtx.kernelDegree, prmRtx.kernelMinResponse, prmRtx.kernelAdaptiveClamping);
 
-  m_splatSetVk.rtxInitAccelerationStructures(m_splatSet);
-
-  initRtDescriptorSet();
-  initRtPipeline();
+  // m_splatSetVk.rtxInitAccelerationStructures(m_splatSet);
 
   // Post processing
   initDescriptorSetPostProcessing();
@@ -901,7 +768,6 @@ void GaussianSplatting::updateSlangMacros()
 {
   m_shaderMacros =  // comment to force clang new line and better indent
       {{"PIPELINE", std::to_string(prmSelectedPipeline)},
-       {"HYBRID_ENABLED", std::to_string((int)(prmSelectedPipeline == PIPELINE_HYBRID || prmSelectedPipeline == PIPELINE_HYBRID_3DGUT))},
        {"CAMERA_TYPE", std::to_string(m_cameraSet.getCamera().model)},
        {"VISUALIZE", std::to_string((int)prmRender.visualize)},
        {"DISABLE_OPACITY_GAUSSIAN", std::to_string((int)prmRender.opacityGaussianDisabled)},
@@ -918,17 +784,7 @@ void GaussianSplatting::updateSlangMacros()
        {"DISTANCE_COMPUTE_WORKGROUP_SIZE", std::to_string((int)prmRaster.distShaderWorkgroupSize)},
        {"RASTER_MESH_WORKGROUP_SIZE", std::to_string((int)prmRaster.meshShaderWorkgroupSize)},
        {"MS_ANTIALIASING", std::to_string((int)prmRaster.msAntialiasing)},
-       {"EXTENT_METHOD", std::to_string((int)prmRaster.extentProjection)},
-       // RTX
-       {"TEMPORAL_SAMPLING", std::to_string((int)prmRtx.temporalSampling)},
-       {"KERNEL_DEGREE", std::to_string(prmRtx.kernelDegree)},
-       {"KERNEL_MIN_RESPONSE", std::to_string(prmRtx.kernelMinResponse)},
-       {"KERNEL_ADAPTIVE_CLAMPING", std::to_string((int)prmRtx.kernelAdaptiveClamping)},
-       {"PAYLOAD_ARRAY_SIZE", std::to_string(prmRtx.payloadArraySize)},
-       {"RTX_USE_INSTANCES", std::to_string((int)prmRtxData.useTlasInstances)},
-       {"RTX_USE_AABBS", std::to_string((int)prmRtxData.useAABBs)},
-       {"RTX_USE_MESHES", std::to_string((int)m_meshSetVk.instances.size())},
-       {"RTX_DOF_ENABLED", std::to_string((int)m_cameraSet.getCamera().dofEnabled)}};
+       {"EXTENT_METHOD", std::to_string((int)prmRaster.extentProjection)}};
 
   m_slangCompiler.clearMacros();
 
@@ -990,13 +846,7 @@ bool GaussianSplatting::initShaders(void)
   // Mesh raster
   success &= compileSlangShader("threedmesh_raster.vert.slang", m_shaders.meshVertexShader);
   success &= compileSlangShader("threedmesh_raster.frag.slang", m_shaders.meshFragmentShader);
-  // Ray trace
-  success &= compileSlangShader("threedgrt_raytrace.rgen.slang", m_shaders.rtxRgenShader);
-  success &= compileSlangShader("threedgrt_raytrace.rmiss.slang", m_shaders.rtxRmissShader);
-  success &= compileSlangShader("threedgrt_raytrace_shadow.rmiss.slang", m_shaders.rtxRmiss2Shader);
-  success &= compileSlangShader("threedgrt_raytrace.rchit.slang", m_shaders.rtxRchitShader);
-  success &= compileSlangShader("threedgrt_raytrace.rahit.slang", m_shaders.rtxRahitShader);
-  success &= compileSlangShader("threedgrt_raytrace.rint.slang", m_shaders.rtxRintShader);
+
   // Post processings
   success &= compileSlangShader("post.comp.slang", m_shaders.postComputeShader);
 
@@ -1199,23 +1049,6 @@ void GaussianSplatting::initPipelines()
       NVVK_DBG_NAME(m_graphicsPipelineGsMesh);
     }
 
-    // create the pipeline that uses mesh shaders for 3DGUT
-    {
-      nvvk::GraphicsPipelineCreator creator;
-      creator.pipelineInfo.layout                  = m_pipelineLayout;
-      creator.colorFormats                         = {m_colorFormat};
-      creator.renderingState.depthAttachmentFormat = m_depthFormat;
-      // The dynamic state is used to change the depth test state dynamically
-      creator.dynamicStateValues.push_back(VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE);
-      creator.dynamicStateValues.push_back(VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE);
-
-      creator.addShader(VK_SHADER_STAGE_MESH_BIT_EXT, "main", m_shaders.threedgutMeshShader);
-      creator.addShader(VK_SHADER_STAGE_FRAGMENT_BIT, "main", m_shaders.threedgutFragmentShader);
-
-      creator.createGraphicsPipeline(m_device, nullptr, pipelineState, &m_graphicsPipeline3dgutMesh);
-      NVVK_DBG_NAME(m_graphicsPipeline3dgutMesh);
-    }
-
     // create the pipeline that uses vertex shaders for 3DGS
     {
       const auto BINDING_ATTR_POSITION    = 0;
@@ -1311,23 +1144,12 @@ void GaussianSplatting::deinitPipelines()
 
   TEST_DESTROY_AND_RESET(m_graphicsPipelineGsVert, vkDestroyPipeline(m_device, m_graphicsPipelineGsVert, nullptr));
   TEST_DESTROY_AND_RESET(m_graphicsPipelineGsMesh, vkDestroyPipeline(m_device, m_graphicsPipelineGsMesh, nullptr));
-  TEST_DESTROY_AND_RESET(m_graphicsPipeline3dgutMesh, vkDestroyPipeline(m_device, m_graphicsPipeline3dgutMesh, nullptr));
   TEST_DESTROY_AND_RESET(m_graphicsPipelineMesh, vkDestroyPipeline(m_device, m_graphicsPipelineMesh, nullptr));
   TEST_DESTROY_AND_RESET(m_computePipelineGsDistCull, vkDestroyPipeline(m_device, m_computePipelineGsDistCull, nullptr));
 
   TEST_DESTROY_AND_RESET(m_pipelineLayout, vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr));
   TEST_DESTROY_AND_RESET(m_descriptorSetLayout, vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr));
   TEST_DESTROY_AND_RESET(m_descriptorPool, vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr));
-
-  // RTX TODO move this in rtDeinitPipeline and invoke in proper location
-  TEST_DESTROY_AND_RESET(m_rtPipeline, vkDestroyPipeline(m_device, m_rtPipeline, nullptr));
-
-  TEST_DESTROY_AND_RESET(m_rtPipelineLayout, vkDestroyPipelineLayout(m_device, m_rtPipelineLayout, nullptr));
-  TEST_DESTROY_AND_RESET(m_rtDescriptorPool, vkDestroyDescriptorPool(m_device, m_rtDescriptorPool, nullptr));
-  TEST_DESTROY_AND_RESET(m_rtDescriptorSetLayout, vkDestroyDescriptorSetLayout(m_device, m_rtDescriptorSetLayout, nullptr));
-
-  m_alloc.destroyBuffer(m_rtSBTBuffer);
-  m_rtShaderGroups.clear();
 
   // Post process
   TEST_DESTROY_AND_RESET(m_computePipelinePostProcess, vkDestroyPipeline(m_device, m_computePipelinePostProcess, nullptr));
@@ -1445,353 +1267,6 @@ void GaussianSplatting::deinitRendererBuffers()
   m_alloc.destroyBuffer(m_frameInfoBuffer);
 }
 
-void GaussianSplatting::benchmarkAdvance()
-{
-  std::cout << "BENCHMARK_ADV " << m_benchmarkId << " {" << std::endl;
-  std::cout << " Memory Scene; Host used \t" << m_splatSetVk.memoryStats.srcAll << "; Device Used \t"
-            << m_splatSetVk.memoryStats.odevAll << "; Device Allocated \t" << m_splatSetVk.memoryStats.devAll
-            << "; (bytes)" << std::endl;
-  std::cout << " Memory Rasterization; Host used \t" << m_renderMemoryStats.rasterHostTotal << "; Device Used \t"
-            << m_renderMemoryStats.rasterDeviceUsedTotal << "; Device Allocated \t"
-            << m_renderMemoryStats.rasterDeviceAllocTotal << "; (bytes)" << std::endl;
-  std::cout << " Memory Raytracing; Host used \t" << m_renderMemoryStats.rtxHostTotal << "; Device Used \t"
-            << m_renderMemoryStats.rtxDeviceUsedTotal << "; Device Allocated \t"
-            << m_renderMemoryStats.rtxDeviceAllocTotal << "; (bytes)" << std::endl;
-  std::cout << "}" << std::endl;
-
-  m_benchmarkId++;
-}
-
-/////////////////////////////////////////////
-/// RTX
-
-//--------------------------------------------------------------------------------------------------
-// This descriptor set holds the Acceleration structure and the output image
-//
-void GaussianSplatting::initRtDescriptorSet()
-{
-  //SCOPED_TIMER(__FUNCTION__"\n");
-
-  //////////////////////
-  // Bindings
-
-  m_rtDescriptorBindings.clear();
-
-  m_rtDescriptorBindings.addBinding(RTX_BINDING_OUTIMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-  m_rtDescriptorBindings.addBinding(RTX_BINDING_AUX1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-  m_rtDescriptorBindings.addBinding(RTX_BINDING_OUTDEPTH, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-
-  m_rtDescriptorBindings.addBinding(RTX_BINDING_TLAS_SPLATS, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1,
-                                    VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-  m_rtDescriptorBindings.addBinding(RTX_BINDING_TLAS_MESH, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1,
-                                    VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-
-  NVVK_CHECK(m_rtDescriptorBindings.createDescriptorSetLayout(m_device, 0, &m_rtDescriptorSetLayout));
-  NVVK_DBG_NAME(m_rtDescriptorSetLayout);
-
-  //
-  std::vector<VkDescriptorPoolSize> poolSize;
-  m_rtDescriptorBindings.appendPoolSizes(poolSize);
-  VkDescriptorPoolCreateInfo poolInfo = {
-      .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-      .maxSets       = 1,
-      .poolSizeCount = uint32_t(poolSize.size()),
-      .pPoolSizes    = poolSize.data(),
-  };
-  NVVK_CHECK(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_rtDescriptorPool));
-  NVVK_DBG_NAME(m_rtDescriptorPool);
-
-  VkDescriptorSetAllocateInfo allocInfo = {
-      .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-      .descriptorPool     = m_rtDescriptorPool,
-      .descriptorSetCount = 1,
-      .pSetLayouts        = &m_rtDescriptorSetLayout,
-  };
-  NVVK_CHECK(vkAllocateDescriptorSets(m_device, &allocInfo, &m_rtDescriptorSet));
-  NVVK_DBG_NAME(m_rtDescriptorSet);
-
-  //////////////////////
-  // Writes
-
-  nvvk::WriteSetContainer writeContainer;
-
-  // Output image buffer
-  writeContainer.append(m_rtDescriptorBindings.getWriteSet(RTX_BINDING_OUTIMAGE, m_rtDescriptorSet),
-                        m_gBuffers.getColorImageView(COLOR_MAIN), VK_IMAGE_LAYOUT_GENERAL);
-  writeContainer.append(m_rtDescriptorBindings.getWriteSet(RTX_BINDING_AUX1, m_rtDescriptorSet),
-                        m_gBuffers.getColorImageView(COLOR_AUX1), VK_IMAGE_LAYOUT_GENERAL);
-  writeContainer.append(m_rtDescriptorBindings.getWriteSet(RTX_BINDING_OUTDEPTH, m_rtDescriptorSet),
-                        m_gBuffers.getDepthImageView(), VK_IMAGE_LAYOUT_GENERAL);
-
-  // splats TLAS
-  if(m_splatSetVk.rtAccelerationStructures.tlas.accel != NULL)
-    writeContainer.append(m_rtDescriptorBindings.getWriteSet(RTX_BINDING_TLAS_SPLATS, m_rtDescriptorSet),
-                          m_splatSetVk.rtAccelerationStructures.tlas);
-  // mesh TLAS
-  if(m_meshSetVk.instances.size() && (m_meshSetVk.rtAccelerationStructures.tlas.accel != NULL))
-  {
-    writeContainer.append(m_rtDescriptorBindings.getWriteSet(RTX_BINDING_TLAS_MESH, m_rtDescriptorSet),
-                          m_meshSetVk.rtAccelerationStructures.tlas);
-  }
-
-  // actually write
-  vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writeContainer.size()), writeContainer.data(), 0, nullptr);
-}
-
-//--------------------------------------------------------------------------------------------------
-// Writes the output image to the descriptor set
-// - Required when changing resolution
-//
-void GaussianSplatting::updateRtDescriptorSet()
-{
-  //SCOPED_TIMER(__FUNCTION__"\n");
-
-  // update only if the descriptor set is already initialized
-  if(m_rtDescriptorSet != VK_NULL_HANDLE)
-  {
-    nvvk::WriteSetContainer writeContainer;
-
-    // Output image buffer
-    writeContainer.append(m_rtDescriptorBindings.getWriteSet(RTX_BINDING_OUTIMAGE, m_rtDescriptorSet),
-                          m_gBuffers.getColorImageView(COLOR_MAIN), VK_IMAGE_LAYOUT_GENERAL);
-    writeContainer.append(m_rtDescriptorBindings.getWriteSet(RTX_BINDING_AUX1, m_rtDescriptorSet),
-                          m_gBuffers.getColorImageView(COLOR_AUX1), VK_IMAGE_LAYOUT_GENERAL);
-    writeContainer.append(m_rtDescriptorBindings.getWriteSet(RTX_BINDING_OUTDEPTH, m_rtDescriptorSet),
-                          m_gBuffers.getDepthImageView(), VK_IMAGE_LAYOUT_GENERAL);
-    // let's update
-    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writeContainer.size()), writeContainer.data(), 0, nullptr);
-  }
-}
-
-//--------------------------------------------------------------------------------------------------
-// Pipeline for the ray tracer: all shaders, raygen, chit, miss
-//
-void GaussianSplatting::initRtPipeline()
-{
-  //SCOPED_TIMER(__FUNCTION__"\n");
-
-  enum StageIndices
-  {
-    eRaygen,
-    eMiss,
-    eMiss2,
-    eClosestHit,
-    eAnyHit,
-    eIntersection,
-    eStageIndicesCount
-  };
-
-  // if not using AABBs we do not use the intersection shader (last stage listed)
-  uint32_t stagesCount = prmRtxData.useAABBs ? eStageIndicesCount : eStageIndicesCount - 1;
-
-  // All stages
-  std::array<VkPipelineShaderStageCreateInfo, eStageIndicesCount> stages{};
-  VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-  stage.pName = "main";  // All the same entry point
-  // Raygen
-  stage.module    = m_shaders.rtxRgenShader;
-  stage.stage     = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-  stages[eRaygen] = stage;
-  // Miss
-  stage.module  = m_shaders.rtxRmissShader;
-  stage.stage   = VK_SHADER_STAGE_MISS_BIT_KHR;
-  stages[eMiss] = stage;
-  // The second miss shader is invoked when a shadow ray misses the geometry. It simply indicates that no occlusion has been found
-  stage.module   = m_shaders.rtxRmiss2Shader;
-  stage.stage    = VK_SHADER_STAGE_MISS_BIT_KHR;
-  stages[eMiss2] = stage;
-  // Hit Group - Closest Hit
-  stage.module        = m_shaders.rtxRchitShader;
-  stage.stage         = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-  stages[eClosestHit] = stage;
-  // Hit Group - Any Hit
-  stage.module    = m_shaders.rtxRahitShader;
-  stage.stage     = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-  stages[eAnyHit] = stage;
-  // Hit Group - Intersection (used only if useAABBs is true)
-  stage.module          = m_shaders.rtxRintShader;
-  stage.stage           = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
-  stages[eIntersection] = stage;
-
-  // Shader groups
-  VkRayTracingShaderGroupCreateInfoKHR group{VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
-  group.anyHitShader       = VK_SHADER_UNUSED_KHR;
-  group.closestHitShader   = VK_SHADER_UNUSED_KHR;
-  group.generalShader      = VK_SHADER_UNUSED_KHR;
-  group.intersectionShader = VK_SHADER_UNUSED_KHR;
-
-  // Raygen
-  group.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-  group.generalShader = eRaygen;
-  m_rtShaderGroups.push_back(group);
-
-  // Miss
-  group.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-  group.generalShader = eMiss;
-  m_rtShaderGroups.push_back(group);
-
-  // Shadow Miss
-  group.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-  group.generalShader = eMiss2;
-  m_rtShaderGroups.push_back(group);
-
-  if(prmRtxData.useAABBs)
-  {
-    // Hit 0 any hit shader with procedural intersections
-    group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
-    group.generalShader      = VK_SHADER_UNUSED_KHR;
-    group.closestHitShader   = VK_SHADER_UNUSED_KHR;
-    group.anyHitShader       = eAnyHit;
-    group.intersectionShader = eIntersection;
-    m_rtShaderGroups.push_back(group);
-  }
-  else
-  {
-    // Hit 0 any hit shader with mesh ICOSA
-    group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-    group.generalShader      = VK_SHADER_UNUSED_KHR;
-    group.closestHitShader   = VK_SHADER_UNUSED_KHR;
-    group.intersectionShader = VK_SHADER_UNUSED_KHR;
-    group.anyHitShader       = eAnyHit;
-    m_rtShaderGroups.push_back(group);
-  }
-
-  // Hit 1 Closest-hit only (for eMeshTlas)
-  group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-  group.generalShader      = VK_SHADER_UNUSED_KHR;
-  group.anyHitShader       = VK_SHADER_UNUSED_KHR;
-  group.intersectionShader = VK_SHADER_UNUSED_KHR;
-  group.closestHitShader   = eClosestHit;
-  m_rtShaderGroups.push_back(group);
-
-  // Push constant: we want to be able to update constants used by the shaders
-  VkPushConstantRange pushConstant{VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR
-                                       | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_INTERSECTION_BIT_KHR,
-                                   0, sizeof(shaderio::PushConstantRay)};
-
-
-  VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-  pipelineLayoutCreateInfo.pushConstantRangeCount = 1;
-  pipelineLayoutCreateInfo.pPushConstantRanges    = &pushConstant;
-
-  // Descriptor sets: one specific to ray tracing, and one shared with the rasterization pipeline
-  std::vector<VkDescriptorSetLayout> rtDescSetLayouts = {m_descriptorSetLayout, m_rtDescriptorSetLayout};
-  pipelineLayoutCreateInfo.setLayoutCount             = static_cast<uint32_t>(rtDescSetLayouts.size());
-  pipelineLayoutCreateInfo.pSetLayouts                = rtDescSetLayouts.data();
-
-  vkCreatePipelineLayout(m_device, &pipelineLayoutCreateInfo, nullptr, &m_rtPipelineLayout);
-
-  // Assemble the shader stages and recursion depth info into the ray tracing pipeline
-  VkRayTracingPipelineCreateInfoKHR rayPipelineInfo{VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
-  rayPipelineInfo.stageCount = stagesCount;  // Stages are shaders
-  rayPipelineInfo.pStages    = stages.data();
-
-  // In this case, m_rtShaderGroups.size() == 4: we have one raygen group,
-  // two miss shader groups, and one hit group.
-  rayPipelineInfo.groupCount = static_cast<uint32_t>(m_rtShaderGroups.size());
-  rayPipelineInfo.pGroups    = m_rtShaderGroups.data();
-
-  // The ray tracing process can shoot rays from the camera, and a shadow ray can be shot from the
-  // hit points of the camera rays, hence a recursion level of 2. This number should be kept as low
-  // as possible for performance reasons. Even recursive ray tracing should be flattened into a loop
-  // in the ray generation to avoid deep recursion.
-  rayPipelineInfo.maxPipelineRayRecursionDepth = 2;  // Ray depth
-  rayPipelineInfo.layout                       = m_rtPipelineLayout;
-
-  vkCreateRayTracingPipelinesKHR(m_device, {}, {}, 1, &rayPipelineInfo, nullptr, &m_rtPipeline);
-
-
-  // Spec only guarantees 1 level of "recursion". Check for that sad possibility here.
-  if(m_rtProperties.maxRayRecursionDepth <= 1)
-  {
-    throw std::runtime_error("Device fails to support ray recursion (m_rtProperties.maxRayRecursionDepth <= 1)");
-  }
-
-  // Creating the SBT
-  {
-    // Shader Binding Table (SBT) setup
-    nvvk::SBTGenerator sbtGenerator;
-    sbtGenerator.init(m_app->getDevice(), m_rtProperties);
-
-    // Prepare SBT data from ray pipeline
-    size_t bufferSize = sbtGenerator.calculateSBTBufferSize(m_rtPipeline, rayPipelineInfo);
-
-    // Create SBT buffer using the size from above
-    NVVK_CHECK(m_alloc.createBuffer(m_rtSBTBuffer, bufferSize, VK_BUFFER_USAGE_2_SHADER_BINDING_TABLE_BIT_KHR, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                    VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
-                                    sbtGenerator.getBufferAlignment()));
-    NVVK_DBG_NAME(m_rtSBTBuffer.buffer);
-
-    // Pass the manual mapped pointer to fill the sbt data
-    NVVK_CHECK(sbtGenerator.populateSBTBuffer(m_rtSBTBuffer.address, bufferSize, m_rtSBTBuffer.mapping));
-
-    // Retrieve the regions, which are using addresses based on the m_sbtBuffer.address
-    m_sbtRegions = sbtGenerator.getSBTRegions();
-
-    sbtGenerator.deinit();
-  }
-}
-
-//--------------------------------------------------------------------------------------------------
-// Ray Tracing the scene
-//
-void GaussianSplatting::raytrace(const VkCommandBuffer& cmdBuf, bool meshDepthOnly)
-{
-  NVVK_DBG_SCOPE(cmdBuf);
-
-  const std::string name = meshDepthOnly ? "Raytracing prepass" : "Raytracing";
-
-  auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmdBuf, name);
-
-  // Initializing push constant values
-  m_pcRay.modelMatrix        = m_splatSetVk.transform;
-  m_pcRay.modelMatrixInverse = m_splatSetVk.transformInverse;
-  // cast to mat3 extracts only the rot/scale part of the transform
-  m_pcRay.modelMatrixRotScaleInverse = glm::inverse(glm::mat3(m_splatSetVk.transform));
-  m_pcRay.meshDepthOnly              = meshDepthOnly;
-
-  std::vector<VkDescriptorSet> descSets{m_descriptorSet, m_rtDescriptorSet};
-  vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
-  vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipelineLayout, 0,
-                          (uint32_t)descSets.size(), descSets.data(), 0, nullptr);
-
-  m_pcRay.vertexAddress = m_splatSetVk.m_splatModel.vertexBuffer.address;
-  m_pcRay.indexAddress  = m_splatSetVk.m_splatModel.indexBuffer.address;
-
-  vkCmdPushConstants(cmdBuf, m_rtPipelineLayout,
-                     VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR
-                         | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_INTERSECTION_BIT_KHR,
-                     0, sizeof(shaderio::PushConstantRay), &m_pcRay);
-
-
-  vkCmdTraceRaysKHR(cmdBuf, &m_sbtRegions.raygen, &m_sbtRegions.miss, &m_sbtRegions.hit, &m_sbtRegions.callable,
-                    uint32_t(m_viewSize[0]), uint32_t(m_viewSize[1]), 1);
-}
-
-
-bool GaussianSplatting::updateFrameCounter()
-{
-  static float     ref_fov{0};
-  static glm::mat4 ref_cam_matrix;
-
-  const auto& m   = cameraManip->getViewMatrix();
-  const auto  fov = cameraManip->getFov();
-
-  if(ref_cam_matrix != m || ref_fov != fov)
-  {
-    resetFrameCounter();
-    ref_cam_matrix = m;
-    ref_fov        = fov;
-  }
-
-  if(prmFrame.frameSampleId >= prmFrame.frameSampleMax)
-  {
-    return false;
-  }
-  prmFrame.frameSampleId++;
-  return true;
-}
-
 ///////////////////////////////////
 // Post processings
 
@@ -1883,21 +1358,6 @@ void GaussianSplatting::initPipelinePostProcessing()
   };
   vkCreateComputePipelines(m_device, {}, 1, &pipelineInfo, nullptr, &m_computePipelinePostProcess);
   NVVK_DBG_NAME(m_computePipelinePostProcess);
-}
-
-void GaussianSplatting::postProcess(VkCommandBuffer cmd)
-{
-  NVVK_DBG_SCOPE(cmd);
-
-  auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "Post process");
-
-  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipelinePostProcess);
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayoutPostProcess, 0, 1,
-                          &m_descriptorSetPostProcess, 0, nullptr);
-
-  uint32_t wgSize = 32;
-
-  vkCmdDispatch(cmd, (uint32_t(m_viewSize.x) + wgSize - 1) / wgSize, (uint32_t(m_viewSize.y) + wgSize - 1) / wgSize, 1);
 }
 
 }  // namespace vk_gaussian_splatting

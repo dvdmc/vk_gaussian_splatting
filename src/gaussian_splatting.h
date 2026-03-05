@@ -100,17 +100,12 @@ namespace vk_gaussian_splatting {
 class GaussianSplatting
 {
 public:
-  // Benchmarking, print extended info
-  // invoked by parameter sequencer
-  void benchmarkAdvance();
-
-public:
   // Camera manipulator
   // public so that it can be accessed by main
   std::shared_ptr<nvutils::CameraManipulator> cameraManip{};
 
 protected:
-  GaussianSplatting(nvutils::ProfilerManager* profilerManager, nvutils::ParameterRegistry* parameterRegistry);
+  GaussianSplatting();
 
   ~GaussianSplatting();
 
@@ -119,8 +114,6 @@ protected:
   void onDetach();
 
   void onResize(VkCommandBuffer cmd, const VkExtent2D& size);
-
-  void onPreRender();
 
   // reset frame counter for temporal accumulated multi-sampling
   // will cause a restart of the frame construction
@@ -135,7 +128,6 @@ protected:
     resetFrameParameters();
     resetRenderParameters();
     resetRasterParameters();
-    resetRtxParameters();
   }
 
   // Initializes all that is related to the scene based
@@ -198,23 +190,11 @@ private:
   void updateRenderingMemoryStatistics(VkCommandBuffer cmd, const uint32_t splatCount);
 
   //////////////
-  // RTX specific
-
-  // updates the frame counter and returns true if a new raytracing pass is needed
-  bool updateFrameCounter();
-
-  void initRtDescriptorSet();
-  void updateRtDescriptorSet();
-  void initRtPipeline();
-  void raytrace(const VkCommandBuffer& cmdBuf, bool meshDepthOnly = false);
-
-  //////////////
   // Post processing
 
   void initDescriptorSetPostProcessing();
   void updateDescriptorSetPostProcessing();
   void initPipelinePostProcessing();
-  void postProcess(VkCommandBuffer cmd);
 
 protected:
   // name of the loaded scene if load is successfull
@@ -261,16 +241,12 @@ protected:
   bool m_requestDeleteSelectedMesh = false;
 
   nvapp::Application*         m_app{nullptr};
-  nvutils::ProfilerManager*   m_profilerManager;
   nvutils::ParameterRegistry* m_parameterRegistry;
   nvvk::StagingUploader       m_uploader{};     // utility to upload buffers to device
   nvvk::SamplerPool           m_samplerPool{};  // The sampler pool, used to create texture samplers
   VkSampler                   m_sampler{};      // texture sampler (nearest)
   nvvk::ResourceAllocator     m_alloc;
   nvvk::PhysicalDeviceInfo    m_physicalDeviceInfo;
-
-  nvutils::ProfilerTimeline* m_profilerTimeline{};
-  nvvk::ProfilerGpuTimer     m_profilerGpuTimer;
 
   glm::vec2         m_viewSize    = {0, 0};
   VkFormat          m_colorFormat = VK_FORMAT_R8G8B8A8_UNORM;    // Color format of the image
@@ -331,13 +307,6 @@ protected:
     // 3D Meshes raster
     VkShaderModule meshVertexShader{};
     VkShaderModule meshFragmentShader{};
-    // for RTX
-    VkShaderModule rtxRgenShader{};    // The ray generator
-    VkShaderModule rtxRmissShader{};   // The miss shader
-    VkShaderModule rtxRmiss2Shader{};  // For shadows (no support yet)
-    VkShaderModule rtxRchitShader{};   // Closest Hit
-    VkShaderModule rtxRahitShader{};   // Any Hit
-    VkShaderModule rtxRintShader{};    // Interrsection
     // Post processings
     VkShaderModule postComputeShader{};
     // Utility storage to process shaders in loop
@@ -350,7 +319,7 @@ protected:
   VkPipeline m_computePipelineGsDistCull = VK_NULL_HANDLE;  // The compute pipeline to compute gaussian splats distances to eye and cull
   VkPipeline m_graphicsPipelineGsVert = VK_NULL_HANDLE;  // The graphic pipeline to rasterize gaussian splats using vertex shaders
   VkPipeline m_graphicsPipelineGsMesh = VK_NULL_HANDLE;  // The graphic pipeline to rasterize gaussian splats using mesh shaders
-  VkPipeline m_graphicsPipeline3dgutMesh = VK_NULL_HANDLE;  // The graphic pipeline to rasterize 3DGUT splats using mesh shaders
+
   // 3D Meshes Pipelines
   VkPipeline m_graphicsPipelineMesh = VK_NULL_HANDLE;  // The graphic pipeline to rasterize meshes
 
@@ -398,28 +367,8 @@ protected:
 
   } m_renderMemoryStats;
 
-  /////////////////////////
-  // RTX specific
-
   VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
   VkPhysicalDeviceAccelerationStructurePropertiesKHR m_accelStructProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
-
-  std::vector<VkRayTracingShaderGroupCreateInfoKHR> m_rtShaderGroups;
-  VkPipelineLayout                                  m_rtPipelineLayout = VK_NULL_HANDLE;
-  VkPipeline m_rtPipeline = VK_NULL_HANDLE;  // The RTX pipeline to ray trace gaussian splats and meshes
-
-  nvvk::DescriptorBindings m_rtDescriptorBindings  = {};
-  VkDescriptorSetLayout    m_rtDescriptorSetLayout = VK_NULL_HANDLE;
-  VkDescriptorSet          m_rtDescriptorSet       = VK_NULL_HANDLE;
-  VkDescriptorPool         m_rtDescriptorPool      = VK_NULL_HANDLE;
-
-  nvvk::Buffer m_payloadDevice;
-
-  nvvk::Buffer m_rtSBTBuffer;  // common to GS and Mesh
-  // The 4 SBT regions (raygen, miss, chit, call in this order)
-  nvvk::SBTGenerator::Regions m_sbtRegions{};  // common to GS and Mesh
-
-  shaderio::PushConstantRay m_pcRay{};  // Push constant for ray tracer
 
   ///////////////////////////////
   // Post processing

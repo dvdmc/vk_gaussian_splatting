@@ -118,14 +118,6 @@ public:
   // update the buffer that stores the materials of a specific model
   void updateObjMaterialsBuffer(int modelIndex);
 
-  // init BLAS and TLAS for all the loaded models
-  void rtxInitAccelerationStructures();
-
-  // update TLAS transforms from instances to device
-  void rtxUpdateTopLevelAccelerationStructure();
-
-  void rtxDeinitAccelerationStructures() { rtAccelerationStructures.deinitAccelerationStructures(); }
-
   // delete an instance, and its related mesh and material if last instance using it.
   // object descriptions buffer and rtx acceleration structures must be updated afterward
   void deleteInstance(uint32_t instanceId);

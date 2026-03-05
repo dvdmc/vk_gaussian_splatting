@@ -49,7 +49,7 @@ public:
 
 public:
   // starts the loader thread
-  bool initialize(nvutils::ProfilerTimeline*);
+  bool initialize();
   // stops the loader thread, cannot be re-used afterward
   inline void shutdown()
   {
@@ -123,8 +123,6 @@ private:
   std::mutex m_mutex;
   // corted wakeup condition
   std::condition_variable m_sortCV;
-  // profiling utility
-  nvutils::ProfilerTimeline* m_profiler;
 
   // input parameters
   glm::vec3           m_sortDir   = {0.0f, 0.0f, 0.0f};  // camera direction
