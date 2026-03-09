@@ -104,7 +104,7 @@ namespace vk_gaussian_splatting {
 class GaussianSplattingUI : public GaussianSplatting, public nvapp::IAppElement
 {
 public:  // Methods specializing IAppElement
-  GaussianSplattingUI(nvutils::ProfilerManager* profilerManager, nvutils::ParameterRegistry* parameterRegistry, bool* benchmarkEnabled);
+  GaussianSplattingUI();
 
   ~GaussianSplattingUI() override;
 
@@ -167,10 +167,6 @@ private:
   bool m_showMemoryStatistics   = true;
   bool m_showShaderDebugging    = false;
 
-  std::shared_ptr<nvapp::ElementProfiler::ViewSettings> m_profilerViewSettings;
-
-  // benchmark mode (enabled by command line), loadings will be synchronous and vsync off
-  bool* m_pBenchmarkEnabled = {};
   // screenshot file name (used by benchmark)
   std::filesystem::path m_screenshotFilename;
 

@@ -110,7 +110,7 @@ public:
   std::shared_ptr<nvutils::CameraManipulator> cameraManip{};
 
 protected:
-  GaussianSplatting(nvutils::ProfilerManager* profilerManager, nvutils::ParameterRegistry* parameterRegistry);
+  GaussianSplatting();
 
   ~GaussianSplatting();
 
@@ -261,16 +261,11 @@ protected:
   bool m_requestDeleteSelectedMesh = false;
 
   nvapp::Application*         m_app{nullptr};
-  nvutils::ProfilerManager*   m_profilerManager;
-  nvutils::ParameterRegistry* m_parameterRegistry;
   nvvk::StagingUploader       m_uploader{};     // utility to upload buffers to device
   nvvk::SamplerPool           m_samplerPool{};  // The sampler pool, used to create texture samplers
   VkSampler                   m_sampler{};      // texture sampler (nearest)
   nvvk::ResourceAllocator     m_alloc;
   nvvk::PhysicalDeviceInfo    m_physicalDeviceInfo;
-
-  nvutils::ProfilerTimeline* m_profilerTimeline{};
-  nvvk::ProfilerGpuTimer     m_profilerGpuTimer;
 
   glm::vec2         m_viewSize    = {0, 0};
   VkFormat          m_colorFormat = VK_FORMAT_R8G8B8A8_UNORM;    // Color format of the image

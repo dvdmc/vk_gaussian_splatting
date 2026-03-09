@@ -125,9 +125,6 @@ struct RtxParameters
 // Parameters that control Raytracing (RTX)
 extern RtxParameters prmRtx;
 
-// Invoked by main() to save defaults after command line options are applied at startup
-void storeDefaultParameters();
-
 // Reset prmData to defaults
 void resetDataParameters();
 // Reset prmRtxData to defaults
@@ -141,8 +138,5 @@ void resetRenderParameters();
 void resetRasterParameters();
 // Reset prmRtx to defaults
 void resetRtxParameters();
-
-// register the set of global parameters
-void registerCommandLineParameters(nvutils::ParameterRegistry* parameterRegistry);
 
 }  // namespace vk_gaussian_splatting

@@ -39,10 +39,8 @@
 
 namespace vk_gaussian_splatting {
 
-GaussianSplatting::GaussianSplatting(nvutils::ProfilerManager* profilerManager, nvutils::ParameterRegistry* parameterRegistry)
-    : m_profilerManager(profilerManager)
-    , m_parameterRegistry(parameterRegistry)
-    , cameraManip(std::make_shared<nvutils::CameraManipulator>()) {
+GaussianSplatting::GaussianSplatting()
+    : cameraManip(std::make_shared<nvutils::CameraManipulator>()) {
 
     };
 
@@ -58,13 +56,9 @@ void GaussianSplatting::onAttach(nvapp::Application* app)
   m_app    = app;
   m_device = m_app->getDevice();
 
-  // profiling
-  m_profilerTimeline = m_profilerManager->createTimeline({.name = "Primary Timeline"});
-  m_profilerGpuTimer.init(m_profilerTimeline, m_app->getDevice(), m_app->getPhysicalDevice(), m_app->getQueue(0).familyIndex, false);
-
   // starts the asynchronous services
   m_plyLoader.initialize();
-  m_cpuSorter.initialize(m_profilerTimeline);
+  m_cpuSorter.initialize();
 
   // Memory allocator
   m_alloc.init(VmaAllocatorCreateInfo{
@@ -136,9 +130,6 @@ void GaussianSplatting::onDetach()
   // release application wide related resources
   m_splatSetVk.deinit();
   m_meshSetVk.deinit();
-  m_profilerGpuTimer.deinit();
-  m_profilerManager->destroyTimeline(m_profilerTimeline);
-  m_profilerTimeline = nullptr;
   m_gBuffers.deinit();
   m_samplerPool.releaseSampler(m_sampler);
   m_samplerPool.deinit();
@@ -157,7 +148,6 @@ void GaussianSplatting::onResize(VkCommandBuffer cmd, const VkExtent2D& viewport
 
 void GaussianSplatting::onPreRender()
 {
-  m_profilerTimeline->frameAdvance();
 }
 
 void GaussianSplatting::onRender(VkCommandBuffer cmd)
@@ -222,10 +212,6 @@ void GaussianSplatting::onRender(VkCommandBuffer cmd)
 
     if(prmRaster.sortingMethod == SORTING_GPU_SYNC_RADIX)
     {
-      // remove eventual async CPU sorting timers
-      // so that it will not appear since not sorting on CPU anymore
-      m_profilerTimeline->asyncRemoveTimer("CPU Dist");
-      m_profilerTimeline->asyncRemoveTimer("CPU Sort");
       // now work on GPU
       processSortingOnGPU(cmd, splatCount);
     }
@@ -255,7 +241,6 @@ void GaussianSplatting::onRender(VkCommandBuffer cmd)
 
   // Drawing the primitives in the G-Buffer
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "Rasterization");
 
     const VkExtent2D& viewportSize = m_app->getViewportSize();
     const VkViewport  viewport{0.0F, 0.0F, float(viewportSize.width), float(viewportSize.height), 0.0F, 1.0F};
@@ -436,7 +421,6 @@ void GaussianSplatting::updateAndUploadFrameInfoUBO(VkCommandBuffer cmd, const u
 {
   NVVK_DBG_SCOPE(cmd);
 
-  auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "UBO update");
 
   Camera camera = m_cameraSet.getCamera();
 
@@ -555,7 +539,6 @@ void GaussianSplatting::tryConsumeAndUploadCpuSortingResult(VkCommandBuffer cmd,
 
   // 2. upload to GPU is needed
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "Copy indices to GPU");
 
     if(newIndexAvailable)
     {
@@ -602,7 +585,6 @@ void GaussianSplatting::processSortingOnGPU(VkCommandBuffer cmd, const uint32_t 
 
   // 2. invoke the distance compute shader
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "GPU Dist");
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipelineGsDistCull);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
@@ -624,7 +606,6 @@ void GaussianSplatting::processSortingOnGPU(VkCommandBuffer cmd, const uint32_t 
 
   // 3. invoke the radix sort from vrdx lib
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "GPU Sort");
 
     vrdxCmdSortKeyValueIndirect(cmd, m_gpuSorter, splatCount, m_indirect.buffer,
                                 offsetof(shaderio::IndirectParams, instanceCount), m_splatDistancesDevice.buffer, 0,
@@ -753,7 +734,6 @@ void GaussianSplatting::readBackIndirectParametersIfNeeded(VkCommandBuffer cmd)
 
   if(m_indirectReadbackHost.buffer != VK_NULL_HANDLE && prmRaster.sortingMethod == SORTING_GPU_SYNC_RADIX)
   {
-    auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "Indirect readback");
 
     // ensures m_indirect buffer modified by GPU sort is available for transfer
     VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
@@ -1741,8 +1721,6 @@ void GaussianSplatting::raytrace(const VkCommandBuffer& cmdBuf, bool meshDepthOn
 
   const std::string name = meshDepthOnly ? "Raytracing prepass" : "Raytracing";
 
-  auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmdBuf, name);
-
   // Initializing push constant values
   m_pcRay.modelMatrix        = m_splatSetVk.transform;
   m_pcRay.modelMatrixInverse = m_splatSetVk.transformInverse;
@@ -1888,8 +1866,6 @@ void GaussianSplatting::initPipelinePostProcessing()
 void GaussianSplatting::postProcess(VkCommandBuffer cmd)
 {
   NVVK_DBG_SCOPE(cmd);
-
-  auto timerSection = m_profilerGpuTimer.cmdFrameSection(cmd, "Post process");
 
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipelinePostProcess);
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayoutPostProcess, 0, 1,

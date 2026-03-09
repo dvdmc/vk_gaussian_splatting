@@ -36,28 +36,9 @@
 
 namespace vk_gaussian_splatting {
 
-GaussianSplattingUI::GaussianSplattingUI(nvutils::ProfilerManager*   profilerManager,
-                                         nvutils::ParameterRegistry* parameterRegistry,
-                                         bool*                       benchmarkEnabled)
-    : GaussianSplatting(profilerManager, parameterRegistry)
-    , m_pBenchmarkEnabled(benchmarkEnabled)
+GaussianSplattingUI::GaussianSplattingUI()
+    : GaussianSplatting()
 {
-
-  // Register some very sepcific command line parameters, related to benchmarking, other parameters are registered in main or in registerCommandLineParameters
-
-  parameterRegistry->add({"updateData", "Use only in benchmark script. 1=triggers an update of data buffers or textures after a parameter change."},
-                         &m_requestUpdateSplatData);
-
-  parameterRegistry->add({.name = "screenshot",
-                          .help = "Use only in benchmark script. Takes a screenshot.",
-                          .callbackSuccess =
-                              [&](const nvutils::ParameterBase* const) {
-                                if(m_app)
-                                {
-                                  m_app->saveScreenShot(m_screenshotFilename);
-                                }
-                              }},
-                         {".png"}, &m_screenshotFilename);
 };
 
 GaussianSplattingUI::~GaussianSplattingUI() {
@@ -278,15 +259,7 @@ void GaussianSplattingUI::onUIMenu()
     if(!m_recentFiles.empty())
       prmScene.sceneToLoadFilename = m_recentFiles[0];
   }
-  if(ImGui::IsKeyPressed(ImGuiKey_F1))
-  {
-    std::string statsFrame;
-    std::string statsSingle;
-    m_profilerManager->appendPrint(statsFrame, statsSingle, true);
-    // print old stats
-    nvutils::Logger::getInstance().log(nvutils::Logger::eSTATS, "ParameterSequence %d \"%s\" = {\n%s\n%s}\n", 0,
-                                       "F1 pressed ", statsFrame.c_str(), statsSingle.c_str());
-  }
+
   if(ImGui::IsKeyPressed(ImGuiKey_1))
     prmSelectedPipeline = PIPELINE_VERT;
   if(ImGui::IsKeyPressed(ImGuiKey_2))
@@ -478,17 +451,6 @@ void GaussianSplattingUI::onUIRender()
   ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
   if(ImGui::BeginPopupModal("Loading", NULL, ImGuiWindowFlags_AlwaysAutoResize))
   {
-    // specific wait for benchmarking mode
-    // prevent display of loading jauge and frame advancing while loading
-    // ensure scene is loaded before moving to next frame
-    if(*m_pBenchmarkEnabled)
-    {
-      while(m_plyLoader.getStatus() == PlyLoaderAsync::State::E_LOADING)
-      {
-        using namespace std::chrono_literals;
-        std::this_thread::sleep_for(100ms);
-      }
-    }
     // managment of async load
     switch(m_plyLoader.getStatus())
     {
@@ -535,10 +497,6 @@ void GaussianSplattingUI::onUIRender()
     }
     ImGui::EndPopup();
   }
-
-  // we never show the UI elements in benchmark mode
-  if(*m_pBenchmarkEnabled)
-    return;
 
   /////////////////
   // Draw the UI parts
