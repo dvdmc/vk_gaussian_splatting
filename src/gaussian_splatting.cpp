@@ -140,10 +140,6 @@ void GaussianSplatting::onResize(VkCommandBuffer cmd, const VkExtent2D& viewport
   resetFrameCounter();
 }
 
-void GaussianSplatting::onPreRender()
-{
-}
-
 void GaussianSplatting::onRender(VkCommandBuffer cmd)
 {
   NVVK_DBG_SCOPE(cmd);

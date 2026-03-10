@@ -115,8 +115,6 @@ protected:
 
   void onResize(VkCommandBuffer cmd, const VkExtent2D& size);
 
-  void onPreRender();
-
   // reset frame counter for temporal accumulated multi-sampling
   // will cause a restart of the frame construction
   inline void resetFrameCounter() { prmFrame.frameSampleId = -1; }

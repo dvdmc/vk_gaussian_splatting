@@ -114,22 +114,13 @@ public:  // Methods specializing IAppElement
 
   void onResize(VkCommandBuffer cmd, const VkExtent2D& size) override;
 
-  void onPreRender() override;
-
   void onRender(VkCommandBuffer cmd) override;
 
   void onUIRender() override;
 
-  // handle recent files save/load at imgui level
-  void guiRegisterIniFileHandlers();
-
 private:
 
   bool guiGetTransform(glm::vec3& scale, glm::vec3& rotation, glm::vec3& translation, glm::mat4& transform, glm::mat4& transformInv, bool disabled /*=false*/);
-
-  // methods to handle recent files in file menu
-  void guiAddToRecentFiles(std::filesystem::path filePath, int historySize = 20);
-  void guiAddToRecentProjects(std::filesystem::path filePath, int historySize = 20);
 
 private:
   // hide/show ui elements

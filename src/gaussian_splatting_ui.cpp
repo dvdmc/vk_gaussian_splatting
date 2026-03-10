@@ -132,17 +132,10 @@ void GaussianSplattingUI::onResize(VkCommandBuffer cmd, const VkExtent2D& size)
   GaussianSplatting::onResize(cmd, size);
 }
 
-void GaussianSplattingUI::onPreRender()
-{
-  GaussianSplatting::onPreRender();
-}
-
 void GaussianSplattingUI::onRender(VkCommandBuffer cmd)
 {
   GaussianSplatting::onRender(cmd);
 }
-
-#define ICON_BLANK "     "
 
 void GaussianSplattingUI::onUIRender()
 {
@@ -190,7 +183,7 @@ void GaussianSplattingUI::onUIRender()
      && m_plyLoader.getStatus() == PlyLoaderAsync::State::E_READY)
   {
     const std::vector<std::filesystem::path> defaultSearchPaths = getResourcesDirs();
-    prmScene.sceneToLoadFilename = nvutils::findFile("flowers_1/flowers_1.ply", defaultSearchPaths).string();
+    prmScene.sceneToLoadFilename = nvutils::findFile("point_cloud.ply", defaultSearchPaths).string();
     prmScene.enableDefaultScene  = false;
   }
 #endif
@@ -299,10 +292,6 @@ void GaussianSplattingUI::onUIRender()
           // destroy scene
           deinitScene();
         }
-        else
-        {
-          guiAddToRecentFiles(m_loadedSceneFilename);
-        }
         // set ready for next load
         m_plyLoader.reset();
         ImGui::CloseCurrentPopup();
@@ -339,224 +328,5 @@ bool GaussianSplattingUI::guiGetTransform(glm::vec3& scale,
 
   return updated;
 }
-
-void GaussianSplattingUI::guiAddToRecentFiles(std::filesystem::path filePath, int historySize)
-{
-  // first check if filePath is absolute
-  if(filePath.is_relative())
-  {
-    filePath = std::filesystem::absolute(filePath);
-  }
-  //
-  auto it = std::find(m_recentFiles.begin(), m_recentFiles.end(), filePath);
-  if(it != m_recentFiles.end())
-  {
-    m_recentFiles.erase(it);
-  }
-  m_recentFiles.insert(m_recentFiles.begin(), filePath);
-  if(m_recentFiles.size() > historySize)
-  {
-    m_recentFiles.pop_back();
-  }
-}
-
-void GaussianSplattingUI::guiAddToRecentProjects(std::filesystem::path filePath, int historySize)
-{
-  // first check if filePath is absolute
-  if(filePath.is_relative())
-  {
-    filePath = std::filesystem::absolute(filePath);
-  }
-  //
-  auto it = std::find(m_recentProjects.begin(), m_recentProjects.end(), filePath);
-  if(it != m_recentProjects.end())
-  {
-    m_recentProjects.erase(it);
-  }
-  m_recentProjects.insert(m_recentProjects.begin(), filePath);
-  if(m_recentProjects.size() > historySize)
-  {
-    m_recentProjects.pop_back();
-  }
-}
-
-void GaussianSplattingUI::guiRegisterIniFileHandlers()
-{
-  // mandatory to work, see ImGui::DockContextInitialize as an example
-  auto readOpen = [](ImGuiContext*, ImGuiSettingsHandler* handler, const char* name) -> void* {
-    if(strcmp(name, "Data") != 0)
-      return NULL;
-    // Make sure we clear out our current recent vectors so we don't just keep adding to the list every time we load
-    // This is if the .ini file is loaded twice, which happens in nvpro_core2
-    auto* ui = static_cast<GaussianSplattingUI*>(handler->UserData);
-    if(strcmp(handler->TypeName, "RecentFiles") == 0)
-    {
-      ui->m_recentFiles.clear();
-    }
-    else if(strcmp(handler->TypeName, "RecentProjects") == 0)
-    {
-      ui->m_recentProjects.clear();
-    }
-    return (void*)1;
-  };
-
-  {
-    // Save settings handler, not using capture so can be used as a function pointer
-    auto saveRecentFilesToIni = [](ImGuiContext* ctx, ImGuiSettingsHandler* handler, ImGuiTextBuffer* buf) {
-      auto* self = static_cast<GaussianSplattingUI*>(handler->UserData);
-      buf->appendf("[%s][Data]\n", handler->TypeName);
-      for(const auto& file : self->m_recentFiles)
-      {
-        buf->appendf("File=%s\n", file.string().c_str());
-      }
-      buf->append("\n");
-    };
-
-    // Load settings handler, not using capture so can be used as a function pointer
-    auto loadRecentFilesFromIni = [](ImGuiContext* ctx, ImGuiSettingsHandler* handler, void* entry, const char* line) {
-      auto* self = static_cast<GaussianSplattingUI*>(handler->UserData);
-      if(strncmp(line, "File=", 5) == 0)
-      {
-        const char* filePath = line + 5;
-        self->m_recentFiles.push_back(filePath);
-      }
-    };
-
-    //
-    ImGuiSettingsHandler iniHandler;
-    iniHandler.TypeName   = "RecentFiles";
-    iniHandler.TypeHash   = ImHashStr(iniHandler.TypeName);
-    iniHandler.ReadOpenFn = readOpen;
-    iniHandler.WriteAllFn = saveRecentFilesToIni;
-    iniHandler.ReadLineFn = loadRecentFilesFromIni;
-    iniHandler.UserData   = this;  // Pass the current instance to the handler
-    ImGui::GetCurrentContext()->SettingsHandlers.push_back(iniHandler);
-  }
-  {
-    // Save settings handler, not using capture so can be used as a function pointer
-    auto saveRecentProjectsToIni = [](ImGuiContext* ctx, ImGuiSettingsHandler* handler, ImGuiTextBuffer* buf) {
-      auto* self = static_cast<GaussianSplattingUI*>(handler->UserData);
-      buf->appendf("[%s][Data]\n", handler->TypeName);
-      for(const auto& file : self->m_recentProjects)
-      {
-        buf->appendf("File=%s\n", file.string().c_str());
-      }
-      buf->append("\n");
-    };
-
-    // Load settings handler, not using capture so can be used as a function pointer
-    auto loadRecentProjectsFromIni = [](ImGuiContext* ctx, ImGuiSettingsHandler* handler, void* entry, const char* line) {
-      auto* self = static_cast<GaussianSplattingUI*>(handler->UserData);
-      if(strncmp(line, "File=", 5) == 0)
-      {
-        const char* filePath = line + 5;
-        self->m_recentProjects.push_back(filePath);
-      }
-    };
-
-    //
-    ImGuiSettingsHandler iniHandler;
-    iniHandler.TypeName   = "RecentProjects";
-    iniHandler.TypeHash   = ImHashStr(iniHandler.TypeName);
-    iniHandler.ReadOpenFn = readOpen;
-    iniHandler.WriteAllFn = saveRecentProjectsToIni;
-    iniHandler.ReadLineFn = loadRecentProjectsFromIni;
-    iniHandler.UserData   = this;  // Pass the current instance to the handler
-    ImGui::GetCurrentContext()->SettingsHandlers.push_back(iniHandler);
-  }
-  {
-    // Save window visibility settings handler
-    auto saveWindowStatesToIni = [](ImGuiContext* ctx, ImGuiSettingsHandler* handler, ImGuiTextBuffer* buf) {
-      auto* self = static_cast<GaussianSplattingUI*>(handler->UserData);
-      buf->appendf("[%s][Data]\n", handler->TypeName);
-      buf->appendf("ShaderDebugging=%d\n", self->m_showShaderDebugging ? 1 : 0);
-      buf->appendf("MemoryStatistics=%d\n", self->m_showMemoryStatistics ? 1 : 0);
-      buf->appendf("RendererStatistics=%d\n", self->m_showRendererStatistics ? 1 : 0);
-      buf->append("\n");
-    };
-
-    // Load window visibility settings handler
-    auto loadWindowStatesFromIni = [](ImGuiContext* ctx, ImGuiSettingsHandler* handler, void* entry, const char* line) {
-      auto* self = static_cast<GaussianSplattingUI*>(handler->UserData);
-      int   value;
-#ifdef _MSC_VER
-      if(sscanf_s(line, "ShaderDebugging=%d", &value) == 1)
-#else
-      if(sscanf(line, "ShaderDebugging=%d", &value) == 1)
-#endif
-      {
-        self->m_showShaderDebugging = (value == 1);
-      }
-#ifdef _MSC_VER
-      else if(sscanf_s(line, "MemoryStatistics=%d", &value) == 1)
-#else
-      else if(sscanf(line, "MemoryStatistics=%d", &value) == 1)
-#endif
-      {
-        self->m_showMemoryStatistics = (value == 1);
-      }
-#ifdef _MSC_VER
-      else if(sscanf_s(line, "RendererStatistics=%d", &value) == 1)
-#else
-      else if(sscanf(line, "RendererStatistics=%d", &value) == 1)
-#endif
-      {
-        self->m_showRendererStatistics = (value == 1);
-      }
-    };
-
-    // Custom readOpen for WindowStates that checks for "Data" section
-    auto readOpenWindowStates = [](ImGuiContext*, ImGuiSettingsHandler* handler, const char* name) -> void* {
-      if(strcmp(name, "Data") != 0)
-        return NULL;
-      return (void*)1;
-    };
-
-    //
-    ImGuiSettingsHandler iniHandler;
-    iniHandler.TypeName   = "WindowStates";
-    iniHandler.TypeHash   = ImHashStr(iniHandler.TypeName);
-    iniHandler.ReadOpenFn = readOpenWindowStates;
-    iniHandler.WriteAllFn = saveWindowStatesToIni;
-    iniHandler.ReadLineFn = loadWindowStatesFromIni;
-    iniHandler.UserData   = this;  // Pass the current instance to the handler
-    ImGui::GetCurrentContext()->SettingsHandlers.push_back(iniHandler);
-  }
-}
-
-///////////////////////////////////
-// Loading and Saving Propjects
-
-namespace fs = std::filesystem;
-
-fs::path getRelativePath(const fs::path& from, const fs::path& to)
-{
-  fs::path relativePath;
-
-  auto fromIter = from.begin();
-  auto toIter   = to.begin();
-
-  // Find common point
-  while(fromIter != from.end() && toIter != to.end() && (*fromIter) == (*toIter))
-  {
-    ++fromIter;
-    ++toIter;
-  }
-
-  // Add ".." for each remaining part in `from` path
-  for(; fromIter != from.end(); ++fromIter)
-  {
-    relativePath /= "..";
-  }
-
-  // Add remaining part of `to` path
-  for(; toIter != to.end(); ++toIter)
-  {
-    relativePath /= *toIter;
-  }
-
-  return relativePath;
-}
-
 
 }  // namespace vk_gaussian_splatting
