@@ -72,7 +72,7 @@ int main(int argc, char** argv)
   VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR rtPositionFetchFeature = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_POSITION_FETCH_FEATURES_KHR, .rayTracingPositionFetch = VK_TRUE};
   vkSetup.deviceExtensions.emplace_back(VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME, &rtPositionFetchFeature, false);
-
+  
   VkPhysicalDeviceShaderClockFeaturesKHR clockFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CLOCK_FEATURES_KHR};
   vkSetup.deviceExtensions.emplace_back(VK_KHR_SHADER_CLOCK_EXTENSION_NAME, &clockFeatures);
 
@@ -110,23 +110,6 @@ int main(int argc, char** argv)
   appInfo.physicalDevice        = vkContext.getPhysicalDevice();
   appInfo.queues                = vkContext.getQueueInfos();
   appInfo.hasUndockableViewport = true;
-
-  // Setting up the layout of the application
-  appInfo.dockSetup = [](ImGuiID viewportID) {
-    // right side panel container
-    ImGuiID assetsID = ImGui::DockBuilderSplitNode(viewportID, ImGuiDir_Right, 0.20F, nullptr, &viewportID);
-    ImGui::DockBuilderDockWindow("Assets", assetsID);
-    ImGuiID propertiesID = ImGui::DockBuilderSplitNode(assetsID, ImGuiDir_Down, 0.75F, nullptr, &assetsID);
-    ImGui::DockBuilderDockWindow("Properties", propertiesID);
-
-    // bottom panel container
-    ImGuiID memoryID = ImGui::DockBuilderSplitNode(viewportID, ImGuiDir_Down, 0.45F, nullptr, &viewportID);
-    ImGui::DockBuilderDockWindow("Memory Statistics", memoryID);
-    ImGuiID profilerID = ImGui::DockBuilderSplitNode(memoryID, ImGuiDir_Right, 0.33F, nullptr, &memoryID);
-    ImGui::DockBuilderDockWindow("Profiler", profilerID);
-    ImGuiID renderingID = ImGui::DockBuilderSplitNode(profilerID, ImGuiDir_Down, 0.30F, nullptr, &profilerID);
-    ImGui::DockBuilderDockWindow("Rendering Statistics", renderingID);
-  };
 
   //
   gaussianSplatting->guiRegisterIniFileHandlers();

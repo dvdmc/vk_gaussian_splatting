@@ -100,11 +100,6 @@ namespace vk_gaussian_splatting {
 class GaussianSplatting
 {
 public:
-  // Benchmarking, print extended info
-  // invoked by parameter sequencer
-  void benchmarkAdvance();
-
-public:
   // Camera manipulator
   // public so that it can be accessed by main
   std::shared_ptr<nvutils::CameraManipulator> cameraManip{};
@@ -135,7 +130,6 @@ protected:
     resetFrameParameters();
     resetRenderParameters();
     resetRasterParameters();
-    resetRtxParameters();
   }
 
   // Initializes all that is related to the scene based
@@ -195,18 +189,11 @@ private:
   // read back updated indirect parameters from m_indirect into m_indirectReadbackHost
   void readBackIndirectParametersIfNeeded(VkCommandBuffer cmd);
 
-  void updateRenderingMemoryStatistics(VkCommandBuffer cmd, const uint32_t splatCount);
-
   //////////////
   // RTX specific
 
   // updates the frame counter and returns true if a new raytracing pass is needed
   bool updateFrameCounter();
-
-  void initRtDescriptorSet();
-  void updateRtDescriptorSet();
-  void initRtPipeline();
-  void raytrace(const VkCommandBuffer& cmdBuf, bool meshDepthOnly = false);
 
   //////////////
   // Post processing
@@ -214,7 +201,6 @@ private:
   void initDescriptorSetPostProcessing();
   void updateDescriptorSetPostProcessing();
   void initPipelinePostProcessing();
-  void postProcess(VkCommandBuffer cmd);
 
 protected:
   // name of the loaded scene if load is successfull
@@ -356,65 +342,6 @@ protected:
   VkDescriptorPool      m_descriptorPool      = VK_NULL_HANDLE;  // Raster Descriptor pool
 
   nvvk::Buffer m_frameInfoBuffer;  // uniform buffer to store frame parameters defined by global variable prmFrame
-
-  // Rendering (sorting and splatting) related memory usage statistics
-  struct RenderMemoryStats
-  {
-    // Rasterization
-
-    uint64_t usedUboFrameInfo = 0;  // used = alloc all the time
-    uint64_t usedIndirect     = 0;  // used = alloc all the time, for the active pipeline
-
-    uint64_t hostAllocDistances = 0;  // used = alloc
-    uint64_t hostAllocIndices   = 0;  // used = alloc
-
-    uint64_t allocIndices      = 0;
-    uint64_t usedIndices       = 0;
-    uint64_t allocDistances    = 0;
-    uint64_t usedDistances     = 0;
-    uint64_t allocVdrxInternal = 0;  // used is unknown
-
-    uint64_t rasterHostTotal        = 0;
-    uint64_t rasterDeviceUsedTotal  = 0;
-    uint64_t rasterDeviceAllocTotal = 0;
-
-    // RTX
-    uint64_t rtxUsedTlas = 0;
-    uint64_t rtxUsedBlas = 0;
-
-    uint64_t rtxHostTotal        = 0;
-    uint64_t rtxDeviceUsedTotal  = 0;
-    uint64_t rtxDeviceAllocTotal = 0;
-
-    // Totals
-    uint64_t hostTotal        = 0;
-    uint64_t deviceUsedTotal  = 0;
-    uint64_t deviceAllocTotal = 0;
-
-  } m_renderMemoryStats;
-
-  /////////////////////////
-  // RTX specific
-
-  VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
-  VkPhysicalDeviceAccelerationStructurePropertiesKHR m_accelStructProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
-
-  std::vector<VkRayTracingShaderGroupCreateInfoKHR> m_rtShaderGroups;
-  VkPipelineLayout                                  m_rtPipelineLayout = VK_NULL_HANDLE;
-  VkPipeline m_rtPipeline = VK_NULL_HANDLE;  // The RTX pipeline to ray trace gaussian splats and meshes
-
-  nvvk::DescriptorBindings m_rtDescriptorBindings  = {};
-  VkDescriptorSetLayout    m_rtDescriptorSetLayout = VK_NULL_HANDLE;
-  VkDescriptorSet          m_rtDescriptorSet       = VK_NULL_HANDLE;
-  VkDescriptorPool         m_rtDescriptorPool      = VK_NULL_HANDLE;
-
-  nvvk::Buffer m_payloadDevice;
-
-  nvvk::Buffer m_rtSBTBuffer;  // common to GS and Mesh
-  // The 4 SBT regions (raygen, miss, chit, call in this order)
-  nvvk::SBTGenerator::Regions m_sbtRegions{};  // common to GS and Mesh
-
-  shaderio::PushConstantRay m_pcRay{};  // Push constant for ray tracer
 
   ///////////////////////////////
   // Post processing

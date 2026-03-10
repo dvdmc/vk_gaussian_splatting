@@ -77,14 +77,6 @@ FragmentOutput main(FragmentInput input)
   }
 #endif
 
-  // add Depth-of-Field perturbation to the ray
-#if RTX_DOF_ENABLED
-  // Initialize the random number
-  uint seed = xxhash32(uint3(int(input.position.x), int(input.position.y), frameInfo.frameSampleId));
-
-  depthOfField(seed, frameInfo.focusDist, frameInfo.aperture, frameInfo.viewInverse, rayOrigin, rayDirection);
-#endif
-
   // The two following transformations are to compute processHit with transformed splat set model
   const float3 splatSetModelRayOrigin = mul(float4(rayOrigin, 1.0), pcRaster.modelMatrixInverse).xyz;
   // Since the ray direction should not be affected by translation,

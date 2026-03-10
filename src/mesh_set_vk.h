@@ -70,24 +70,18 @@ public:
   std::vector<shaderio::ObjDesc> objectDescriptions;        // Model description for device access
   nvvk::Buffer                   objectDescriptionsBuffer;  // Device buffer of the OBJ objectDescriptions
 
-  // RTX specifics
-  nvvk::AccelerationStructureHelper rtAccelerationStructures;
-
 public:
   inline void init(nvapp::Application*                                 app,
                    nvvk::ResourceAllocator*                            alloc,
-                   nvvk::StagingUploader*                              uploader,
-                   VkPhysicalDeviceAccelerationStructurePropertiesKHR* accelStructProps)
+                   nvvk::StagingUploader*                              uploader)
   {
     m_app      = app;
     m_alloc    = alloc;
     m_uploader = uploader;
-    rtAccelerationStructures.init(m_alloc, m_uploader, m_app->getQueue(0), 2000, 2000);
   };
 
   inline void deinit(void)
   {
-    rtAccelerationStructures.deinit();
     m_app      = {};
     m_alloc    = {};
     m_uploader = {};
@@ -118,14 +112,6 @@ public:
   // update the buffer that stores the materials of a specific model
   void updateObjMaterialsBuffer(int modelIndex);
 
-  // init BLAS and TLAS for all the loaded models
-  void rtxInitAccelerationStructures();
-
-  // update TLAS transforms from instances to device
-  void rtxUpdateTopLevelAccelerationStructure();
-
-  void rtxDeinitAccelerationStructures() { rtAccelerationStructures.deinitAccelerationStructures(); }
-
   // delete an instance, and its related mesh and material if last instance using it.
   // object descriptions buffer and rtx acceleration structures must be updated afterward
   void deleteInstance(uint32_t instanceId);
@@ -139,9 +125,6 @@ private:
     m_alloc->destroyBuffer(mesh.materialsBuffer);
     m_alloc->destroyBuffer(mesh.matIndexBuffer);
   }
-
-  // RTX specifics
-  nvvk::AccelerationStructureGeometryInfo rtxCreateMeshVkKHR(const Mesh& model);
 
 private:
   nvapp::Application*      m_app{};

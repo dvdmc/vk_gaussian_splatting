@@ -46,10 +46,6 @@ FragmentOutput main(FragmentInput input)
 {
   FragmentOutput output;
 
-#if HYBRID_ENABLED
-  output.color = float4(0.0, 0.0, 0.0, 0.0);
-#else
-
   ObjDesc objResource = objDesc[pcRaster.objIndex];
   // In GLSL version materialIndexAddress was erroneously dereferenced using pcRaster.objIndex. Now corrected using input.primitiveID.
   ObjMaterial material = objResource.materialAddress[objResource.materialIndexAddress[input.primitiveID]];
@@ -60,7 +56,6 @@ FragmentOutput main(FragmentInput input)
 
   output.color = float4(color, 1);
 
-#endif
 
   return output;
 }

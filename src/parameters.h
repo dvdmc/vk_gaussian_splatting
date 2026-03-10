@@ -54,23 +54,6 @@ struct VramDataParameters
 // Parameters that controls data storage
 extern VramDataParameters prmData;
 
-// Parameters that controls data format and storage in VRAM, specific to RTX pipelines
-// Mainly about acceleration structures and particle primitive geometry
-struct RtxVramDataParameters
-{
-  // if true will compact BLAS
-  bool compressBlas = true;
-  // set to true to use AABBs instead of mesh ICOSA primitives
-  // This will also make the Rtx pipeline use parametric intersections
-  bool useAABBs = false;
-  // if true, use one instance per splat in TLAS and single splat model in BLAS
-  // otherwise, only one instance in TLAS and all splats transformed in BLAS
-  bool useTlasInstances = true;
-};
-
-// Parameters that controls data storage
-extern RtxVramDataParameters prmRtxData;
-
 // Parameters common to all rendering pipelines and provided to shaders as a UniformBufffer
 // FrameInfo is defined in shaderio.h since declaration is shared with shaders
 extern shaderio::FrameInfo prmFrame;
@@ -110,25 +93,9 @@ struct RasterParameters
 // Parameters that control rasterization
 extern RasterParameters prmRaster;
 
-// Parameters that control Raytracing (RTX)
-struct RtxParameters
-{
-  // temporalSampling is controlled by temporalSamplingMode, it is not directly exposed
-  bool  temporalSampling       = false;  // do we accumulate frame results over time (for DOF and other)
-  int   temporalSamplingMode   = TEMPORAL_SAMPLING_AUTO;  // how do we control temporal sampling activation
-  int   kernelDegree           = KERNEL_DEGREE_QUADRATIC;
-  float kernelMinResponse      = 0.0113f;  // constant value from Paper
-  bool  kernelAdaptiveClamping = true;
-  int   payloadArraySize       = 18;  // best default value set by experimentation on ADA6000
-};
-
-// Parameters that control Raytracing (RTX)
-extern RtxParameters prmRtx;
 
 // Reset prmData to defaults
 void resetDataParameters();
-// Reset prmRtxData to defaults
-void resetRtxDataParameters();
 
 // Reset prmFrame to defaults
 void resetFrameParameters();
@@ -136,7 +103,5 @@ void resetFrameParameters();
 void resetRenderParameters();
 // Reset prmRaster to defaults
 void resetRasterParameters();
-// Reset prmRtx to defaults
-void resetRtxParameters();
 
 }  // namespace vk_gaussian_splatting

@@ -55,26 +55,22 @@ public:
             nvvk::ResourceAllocator*                            alloc,
             nvvk::StagingUploader*                              uploader,
             VkSampler*                                          sampler,
-            nvvk::PhysicalDeviceInfo*                           deviceInfo,
-            VkPhysicalDeviceAccelerationStructurePropertiesKHR* accelStructProps)
+            nvvk::PhysicalDeviceInfo*                           deviceInfo)
   {
     m_app        = app;
     m_alloc      = alloc;
     m_uploader   = uploader;
     m_sampler    = sampler;
     m_deviceInfo = deviceInfo;
-    rtAccelerationStructures.init(m_alloc, m_uploader, m_app->getQueue(0), 2000, 2000);
   }
 
   void deinit()
   {
-    rtAccelerationStructures.deinit();
     m_app        = nullptr;
     m_alloc      = nullptr;
     m_uploader   = nullptr;
     m_sampler    = nullptr;
     m_deviceInfo = nullptr;
-    rtxValid     = false;
   }
 
   void resetTransform()
@@ -93,26 +89,6 @@ public:
   // destroy all buffers from VRAM
   // a new initDataStorage can be invoked afterward
   void deinitDataStorage();
-
-  // initDataStorage must be invoked prior to creation of the splat model
-  void rtxInitSplatModel(SplatSet& splatSet, bool useInstances, bool useAABBs, bool compressBlas, int kernelDegree, float kernelMinResponse, bool kernelAdaptiveClamping);
-
-  void rtxDeinitSplatModel()
-  {
-    m_alloc->destroyBuffer(m_splatModel.vertexBuffer);
-    m_alloc->destroyBuffer(m_splatModel.indexBuffer);
-    m_alloc->destroyBuffer(m_splatModel.aabbBuffer);
-    rtxValid = false;
-  }
-
-  // rtxInitSplatModel must be invoked prior to creation of acceleration structure
-  void rtxInitAccelerationStructures(SplatSet& splatSet);
-
-  void rtxDeinitAccelerationStructures()
-  {
-    rtAccelerationStructures.deinitAccelerationStructures();
-    rtxValid = false;
-  }
 
   // reset the memory usage stats
   inline void resetMemoryStats() { memoryStats = {}; }
@@ -149,31 +125,6 @@ public:
 
   ////////////////////////
   // Ray tracing specifics
-
-  // The Splat model (contains only one splat if instanced or all splats)
-  struct SplatModel
-  {
-    // Icosa related
-
-    uint32_t     nbVertices{0};  // total number of vec3 vertex positions stored in vertexBuffer
-    uint32_t     nbIndices{0};   // total number of vertex indices stored in vertexBuffer
-    nvvk::Buffer vertexBuffer;   // Device buffer of the vertices
-    nvvk::Buffer indexBuffer;    // Device buffer of the indices forming triangles
-
-    // AABB related
-    uint32_t     nbAABB;
-    nvvk::Buffer aabbBuffer;
-
-  } m_splatModel;
-
-  // aligned with VkAabbPositionsKHR
-  struct SplatAabb
-  {
-    glm::vec3 minimum;
-    glm::vec3 maximum;
-  };
-
-  nvvk::AccelerationStructureHelper rtAccelerationStructures;  // provides access to BLAS and TLAS
 
   // data storage memory usage statistics
   struct ModelMemoryStats
@@ -213,12 +164,6 @@ public:
     uint32_t odevShOther = 0;  // GRAM bytes used for SH degree 1 of source model
   } memoryStats;
 
-  // Is RTX valid
-  bool rtxValid = false;  // This flag is set to false if some rtx AS allocations failed or before init
-  // RTX AS memory stats
-  uint64_t tlasSizeBytes;  // Size of the TLAS in VRAM in bytes
-  uint64_t blasSizeBytes;  // Size of the BLAS in VRAM in bytes
-
 private:
   // create the buffers on the device and upload
   // the splat set data from host to device
@@ -242,27 +187,8 @@ private:
   void deinitTexture(nvvk::Image& texture);
 
 private:
-  // RTX specifics
-
-  void rtxCreateSplatIcosahedron(std::vector<glm::vec3>& vertices,
-                                 std::vector<uint32_t>&  indices,
-                                 std::vector<SplatAabb>& aabbs,
-                                 glm::mat4               transform = glm::mat4(1.0));
-
-  glm::mat4 rtxComputeTransformMatrix(SplatSet& splatSet, uint64_t splatIdx);
-
-  nvvk::AccelerationStructureGeometryInfo rtxCreateSplatModelAccelerationStructureGeometryInfo();
-
-private:
   uint32_t m_storage{};
   uint32_t m_format{};
-
-  bool  m_rtxUseAABBs;
-  bool  m_rtxUseInstances;
-  bool  m_rtxCompressBlas;
-  int   m_rtxKernelDegree;
-  float m_rtxKernelMinResponse;
-  bool  m_rtxKernelAdaptiveClamping;
 
   nvapp::Application*       m_app        = nullptr;
   nvvk::ResourceAllocator*  m_alloc      = nullptr;

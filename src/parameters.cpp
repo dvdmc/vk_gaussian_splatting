@@ -25,33 +25,26 @@ namespace vk_gaussian_splatting {
 SceneParameters prmScene{};
 
 VramDataParameters    prmData{};
-RtxVramDataParameters prmRtxData{};
 
 // no reset function on purpose
 uint32_t            prmSelectedPipeline = PIPELINE_MESH;
 shaderio::FrameInfo prmFrame{};
 RenderParameters    prmRender{};
 RasterParameters    prmRaster{};
-RtxParameters       prmRtx{};
 
 // Storage for respective default values
 
 static VramDataParameters    prmDataDefault{};
-static RtxVramDataParameters prmRtxDataDefault{};
 
 static shaderio::FrameInfo prmFrameDefault{};
 static RenderParameters    prmRenderDefault{};
 static RasterParameters    prmRasterDefault{};
-static RtxParameters       prmRtxDefault{};
 
 void resetDataParameters()
 {
   prmData = prmDataDefault;
 }
-void resetRtxDataParameters()
-{
-  prmRtxData = prmRtxDataDefault;
-}
+
 void resetFrameParameters()
 {
   prmFrame = prmFrameDefault;
@@ -63,10 +56,6 @@ void resetRenderParameters()
 void resetRasterParameters()
 {
   prmRaster = prmRasterDefault;
-}
-void resetRtxParameters()
-{
-  prmRtx = prmRtxDefault;
 }
 
 }  // namespace vk_gaussian_splatting

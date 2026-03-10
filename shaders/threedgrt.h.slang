@@ -114,59 +114,6 @@ float particleRayDistance(in float3 particleRayOrigin, in float3 particleRayDire
   return sqrt(dot(grds, grds));
 }
 
-// Version with that fetches color used by 3DGRT
-bool particleProcessHit(in FrameInfo frameInfo,
-                        in float3      modelRayOrigin,
-                        in float3      modelRayDirection,
-                        in int       splatId,
-                        inout double3  transmittance,
-                        inout float3   radiance)
-{
-  //
-  float3 particlePosition;
-  float3 particleScale;
-  float3x3 particleInvRotation;
-
-  fetchParticlePSR(splatId, particlePosition, particleScale, particleInvRotation);
-
-  float3 particleRayOrigin;
-  float3 particleRayDirection;
-  particleCannonicalRay(modelRayOrigin, modelRayDirection, particlePosition, particleScale, particleInvRotation,
-                        particleRayOrigin, particleRayDirection);
-
-  const float4  color           = fetchColor(splatId);
-  const float particleDensity = color.w;
-
-  const double  minParticleAlpha         = 1.0f / 255.0f;
-  const int32_t particleKernelDegree     = KERNEL_DEGREE;
-  const float   minParticleKernelDensity = KERNEL_MIN_RESPONSE;
-
-  const float maxResponse = particleRayMaxKernelResponse(particleRayOrigin, particleRayDirection, particleKernelDegree);
-  float       alpha       = min(frameInfo.alphaClamp, maxResponse * particleDensity);
-
-  const bool acceptHit = (particleDensity > frameInfo.alphaCullThreshold) && (double(alpha) > minParticleAlpha)
-                         && (maxResponse > minParticleKernelDensity);
-  if(acceptHit)
-  {
-#if DISABLE_OPACITY_GAUSSIAN
-    alpha = 1.0;
-#endif
-    // fetch radiance from SH coefs > degree 0
-    const float3 vectorToParticleCenter = normalize(particlePosition - modelRayOrigin);
-#if SHOW_SH_ONLY == 1
-    const float3 grad = float3(0.5) + fetchViewDependentRadiance(splatId, vectorToParticleCenter);
-#else
-    const float3 grad = color.xyz + fetchViewDependentRadiance(splatId, vectorToParticleCenter);
-#endif
-
-    const float3 weight = float3(alpha * float3(transmittance));
-    radiance += grad * weight;
-    transmittance *= (1.0 - double(alpha));
-  }
-
-  return acceptHit;
-}
-
 // Version with pre fetched particle PSR and color. Used by 3DGUT.
 bool particleProcessHitGut(in FrameInfo frameInfo,
                            in float3      modelRayOrigin,
