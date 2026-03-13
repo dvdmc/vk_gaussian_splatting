@@ -95,264 +95,284 @@
 #include "light_set_vk.h"
 #include "camera_set.h"
 
-namespace vk_gaussian_splatting {
-
-class GaussianSplatting
+namespace vk_gaussian_splatting
 {
-public:
-  // Camera manipulator
-  // public so that it can be accessed by main
-  std::shared_ptr<nvutils::CameraManipulator> cameraManip{};
+	class GaussianSplatting
+	{
+	public:
+		// Camera manipulator
+		// public so that it can be accessed by main
+		std::shared_ptr<nvutils::CameraManipulator> cameraManip{};
+		std::shared_ptr<nvutils::CameraManipulator> cameraManip2{};
 
-protected:
-  GaussianSplatting();
+		struct ReadbackBuffer
+		{
+			VkBuffer       buffer{VK_NULL_HANDLE};
+			VkDeviceMemory memory{VK_NULL_HANDLE};
+			VkDeviceSize   size{0};
+		};
+		
+		std::vector<glm::vec3> cameraPositions = {glm::vec3(10.0f), glm::vec3(10.0f, .0f, .0f) };
+		int                    activeCamera    = 1;
+		std::vector<unsigned char> image;
 
-  ~GaussianSplatting();
+	protected:
+		GaussianSplatting();
 
-  void onAttach(nvapp::Application* app);
+		~GaussianSplatting();
 
-  void onDetach();
+		void onAttach(nvapp::Application* app);
 
-  void onResize(VkCommandBuffer cmd, const VkExtent2D& size);
+		void onDetach();
 
-  // reset frame counter for temporal accumulated multi-sampling
-  // will cause a restart of the frame construction
-  inline void resetFrameCounter() { prmFrame.frameSampleId = -1; }
+		void onResize(VkCommandBuffer cmd, const VkExtent2D& size);
 
-  void onRender(VkCommandBuffer cmd);
+		// reset frame counter for temporal accumulated multi-sampling
+		// will cause a restart of the frame construction
+		inline void resetFrameCounter() { prmFrame.frameSampleId = -1; }
 
-  // reset the rendering settings that can
-  // be modified by the user interface
-  inline void resetRenderSettings()
-  {
-    resetFrameParameters();
-    resetRenderParameters();
-    resetRasterParameters();
-  }
+		void onRender(VkCommandBuffer cmd);
 
-  // Initializes all that is related to the scene based
-  // on current parameters. VRAM Data, shaders, pipelines.
-  // Invoked on scene load success.
-  bool initAll();
+		// reset the rendering settings that can
+		// be modified by the user interface
+		inline void resetRenderSettings()
+		{
+			resetFrameParameters();
+			resetRenderParameters();
+			resetRasterParameters();
+		}
 
-  // Denitializes all that is related to the scene.
-  // VRAM Data, shaders, pipelines.
-  // Invoked on scene close or on exit.
-  void deinitAll();
+		// Initializes all that is related to the scene based
+		// on current parameters. VRAM Data, shaders, pipelines.
+		// Invoked on scene load success.
+		bool initAll();
 
-  // free scene (splat set) from RAM
-  void deinitScene();
+		// Denitializes all that is related to the scene.
+		// VRAM Data, shaders, pipelines.
+		// Invoked on scene close or on exit.
+		void deinitAll();
 
-private:
-  // init the raster pipelines
-  void initPipelines();
+		// free scene (splat set) from RAM
+		void deinitScene();
 
-  // deinit raster and rtx pipelines TODO move rtx in separate method
-  void deinitPipelines();
+	private:
+		// init the raster pipelines
+		void initPipelines();
 
-  void initRendererBuffers();
+		// deinit raster and rtx pipelines TODO move rtx in separate method
+		void deinitPipelines();
 
-  void deinitRendererBuffers();
+		void initRendererBuffers();
 
-  void updateSlangMacros(void);
+		void deinitRendererBuffers();
 
-  bool compileSlangShader(const std::string& filename, VkShaderModule& module);
+		void updateSlangMacros(void);
 
-  bool initShaders(void);
+		bool compileSlangShader(const std::string& filename, VkShaderModule& module);
 
-  void deinitShaders(void);
+		bool initShaders(void);
 
-  /////////////
-  // Rendering submethods
+		void deinitShaders(void);
 
-  // process eventual update requests comming from UI or benchmark
-  // that requires to be performed before a new rendering after a DeviceWaitIdle
-  void processUpdateRequests(void);
+		static VkResult updateReadbackBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, ReadbackBuffer& out);
 
-  // Updates frame information uniform buffer and frame camera info
-  void updateAndUploadFrameInfoUBO(VkCommandBuffer cmd, const uint32_t splatCount);
+		/////////////
+		// Rendering submethods
 
-  void tryConsumeAndUploadCpuSortingResult(VkCommandBuffer cmd, const uint32_t splatCount);
+		// process eventual update requests comming from UI or benchmark
+		// that requires to be performed before a new rendering after a DeviceWaitIdle
+		void processUpdateRequests(void);
 
-  void processSortingOnGPU(VkCommandBuffer cmd, const uint32_t splatCount);
+		// Updates frame information uniform buffer and frame camera info
+		void updateAndUploadFrameInfoUBO(VkCommandBuffer cmd, const uint32_t splatCount);
 
-  void drawSplatPrimitives(VkCommandBuffer cmd, const uint32_t splatCount);
+		void tryConsumeAndUploadCpuSortingResult(VkCommandBuffer cmd, const uint32_t splatCount);
 
-  void drawMeshPrimitives(VkCommandBuffer cmd);
+		void processSortingOnGPU(VkCommandBuffer cmd, const uint32_t splatCount);
 
-  // for statistics display in the UI
-  // copy form m_indirectReadbackHost updated at previous frame to m_indirectReadback
-  void collectReadBackValuesIfNeeded(void);
-  // for statistics display in the UI
-  // read back updated indirect parameters from m_indirect into m_indirectReadbackHost
-  void readBackIndirectParametersIfNeeded(VkCommandBuffer cmd);
+		void drawSplatPrimitives(VkCommandBuffer cmd, const uint32_t splatCount);
 
-  //////////////
-  // RTX specific
+		void drawMeshPrimitives(VkCommandBuffer cmd);
 
-  // updates the frame counter and returns true if a new raytracing pass is needed
-  bool updateFrameCounter();
+		// for statistics display in the UI
+		// copy form m_indirectReadbackHost updated at previous frame to m_indirectReadback
+		void collectReadBackValuesIfNeeded(void);
+		// for statistics display in the UI
+		// read back updated indirect parameters from m_indirect into m_indirectReadbackHost
+		void readBackIndirectParametersIfNeeded(VkCommandBuffer cmd);
 
-  //////////////
-  // Post processing
+		//////////////
+		// RTX specific
 
-  void initDescriptorSetPostProcessing();
-  void updateDescriptorSetPostProcessing();
-  void initPipelinePostProcessing();
+		// updates the frame counter and returns true if a new raytracing pass is needed
+		bool updateFrameCounter();
 
-protected:
-  // name of the loaded scene if load is successfull
-  std::filesystem::path m_loadedSceneFilename;
+		//////////////
+		// Post processing
 
-  // scene loader
-  PlyLoaderAsync m_plyLoader;
-  // 3DGS/3DGRT model in RAM
-  SplatSet m_splatSet = {};
-  // 3DGS/3DGRT model in VRAM
-  SplatSetVk m_splatSetVk = {};
-  // Set of meshes in VRAM
-  MeshSetVk m_meshSetVk = {};
-  // Set of lights in RAM and VRAM
-  LightSetVk m_lightSet = {};
-  // Set of cameras in RAM
-  CameraSet m_cameraSet = {};
+		void initDescriptorSetPostProcessing();
+		void updateDescriptorSetPostProcessing();
+		void initPipelinePostProcessing();
 
-  // Index of the item selected in a root node of scene graph or -1 if none
-  int64_t m_selectedItemIndex = -1;
-  // Index of the last camera loaded
-  uint64_t m_lastLoadedCamera = 0;
+	protected:
+		// name of the loaded scene if load is successfull
+		std::filesystem::path m_loadedSceneFilename;
 
-  // Push constant for rasterizer
-  shaderio::PushConstant m_pcRaster{};
+		// scene loader
+		PlyLoaderAsync m_plyLoader;
+		// 3DGS/3DGRT model in RAM
+		SplatSet m_splatSet = {};
+		// 3DGS/3DGRT model in VRAM
+		SplatSetVk m_splatSetVk = {};
+		// Set of meshes in VRAM
+		MeshSetVk m_meshSetVk = {};
+		// Set of lights in RAM and VRAM
+		LightSetVk m_lightSet = {};
+		// Set of cameras in RAM
+		CameraSet m_cameraSet = {};
 
-  // counting benchmark steps
-  int m_benchmarkId = 0;
+		// Index of the item selected in a root node of scene graph or -1 if none
+		int64_t m_selectedItemIndex = -1;
+		// Index of the last camera loaded
+		uint64_t m_lastLoadedCamera = 0;
 
-  // trigger a rebuild of the data in VRAM (textures or buffers) at next frame
-  // also triggers shaders and pipeline rebuild
-  bool m_requestUpdateSplatData = false;
-  // trigger a rebuild of the splat set RTX Acceleration Structure at next frame
-  bool m_requestUpdateSplatAs = false;
-  // request delayed update of Acceleration Structures if not using ray tracing
-  bool m_requestDelayedUpdateSplatAs = false;
-  // trigger a rebuild of the shaders and pipelines at next frame
-  bool m_requestUpdateShaders = false;
-  // trigger the reinit of mesh acceleration structures at next frame
-  bool m_requestUpdateMeshData = false;
-  // trigger the update of light buffer at next frame
-  bool m_requestUpdateLightsBuffer = false;
-  // trigger the deletion of the selected mesh object
-  bool m_requestDeleteSelectedMesh = false;
+		// Push constant for rasterizer
+		shaderio::PushConstant m_pcRaster{};
 
-  nvapp::Application*         m_app{nullptr};
-  nvvk::StagingUploader       m_uploader{};     // utility to upload buffers to device
-  nvvk::SamplerPool           m_samplerPool{};  // The sampler pool, used to create texture samplers
-  VkSampler                   m_sampler{};      // texture sampler (nearest)
-  nvvk::ResourceAllocator     m_alloc;
-  nvvk::PhysicalDeviceInfo    m_physicalDeviceInfo;
+		// counting benchmark steps
+		int m_benchmarkId = 0;
 
-  glm::vec2         m_viewSize    = {0, 0};
-  VkFormat          m_colorFormat = VK_FORMAT_R8G8B8A8_UNORM;    // Color format of the image
-  VkFormat          m_depthFormat = VK_FORMAT_UNDEFINED;         // Depth format of the depth buffer
-  VkClearColorValue m_clearColor  = {{0.0F, 0.0F, 0.0F, 0.0F}};  // Clear color
-  VkDevice          m_device      = VK_NULL_HANDLE;              // Convenient sortcut to device
+		// trigger a rebuild of the data in VRAM (textures or buffers) at next frame
+		// also triggers shaders and pipeline rebuild
+		bool m_requestUpdateSplatData = false;
+		// trigger a rebuild of the splat set RTX Acceleration Structure at next frame
+		bool m_requestUpdateSplatAs = false;
+		// request delayed update of Acceleration Structures if not using ray tracing
+		bool m_requestDelayedUpdateSplatAs = false;
+		// trigger a rebuild of the shaders and pipelines at next frame
+		bool m_requestUpdateShaders = false;
+		// trigger the reinit of mesh acceleration structures at next frame
+		bool m_requestUpdateMeshData = false;
+		// trigger the update of light buffer at next frame
+		bool m_requestUpdateLightsBuffer = false;
+		// trigger the deletion of the selected mesh object
+		bool m_requestDeleteSelectedMesh = false;
 
-  // Convenient enum to dereference color buffers in GBuffers
-  enum
-  {
-    COLOR_MAIN = 0,
-    COLOR_AUX1 = 1,
-  };
-  // G-Buffers: 2 color buffers + 1 depth buffer
-  nvvk::GBuffer m_gBuffers;
+		nvapp::Application* m_app{nullptr};
+		nvvk::StagingUploader m_uploader{}; // utility to upload buffers to device
+		nvvk::SamplerPool m_samplerPool{}; // The sampler pool, used to create texture samplers
+		VkSampler m_sampler{}; // texture sampler (nearest)
+		nvvk::ResourceAllocator m_alloc;
+		nvvk::PhysicalDeviceInfo m_physicalDeviceInfo;
 
-  // camera info for current frame, updated by onRender
-  glm::vec3 m_eye{};
-  glm::vec3 m_center{};
-  glm::vec3 m_up{};
+		glm::vec2 m_viewSize = {0, 0};
+		VkFormat m_colorFormat = VK_FORMAT_R8G8B8A8_UNORM; // Color format of the image
+		VkFormat m_depthFormat = VK_FORMAT_UNDEFINED; // Depth format of the depth buffer
+		VkClearColorValue m_clearColor = {{0.0F, 0.0F, 0.0F, 0.0F}}; // Clear color
+		VkDevice m_device = VK_NULL_HANDLE; // Convenient sortcut to device
 
-  // IndirectParams structure defined in shaderio.h
-  nvvk::Buffer             m_indirect;              // indirect parameter buffer
-  nvvk::Buffer             m_indirectReadbackHost;  // buffer for readback
-  shaderio::IndirectParams m_indirectReadback;      // readback values
-  bool m_canCollectReadback = false;  // tells wether readback will be available in Host buffer at next frame
+		// Convenient enum to dereference color buffers in GBuffers
+		enum
+		{
+			COLOR_MAIN = 0,
+			COLOR_AUX1 = 1,
+		};
 
-  // TODO maybe move that in SplatSetVK next to icosa, and the associated init/deinit
-  nvvk::Buffer m_quadVertices;  // Buffer of vertices for the splat quad
-  nvvk::Buffer m_quadIndices;   // Buffer of indices for the splat quad
+		// G-Buffers: 2 color buffers + 1 depth buffer
+		nvvk::GBuffer m_gBuffers[2];
+
+		// camera info for current frame, updated by onRender
+		glm::vec3 m_eye{};
+		glm::vec3 m_center{};
+		glm::vec3 m_up{};
+
+		// IndirectParams structure defined in shaderio.h
+		nvvk::Buffer m_indirect; // indirect parameter buffer
+		nvvk::Buffer m_indirectReadbackHost; // buffer for readback
+		shaderio::IndirectParams m_indirectReadback; // readback values
+		bool m_canCollectReadback = false; // tells wether readback will be available in Host buffer at next frame
+
+		// TODO maybe move that in SplatSetVK next to icosa, and the associated init/deinit
+		nvvk::Buffer m_quadVertices; // Buffer of vertices for the splat quad
+		nvvk::Buffer m_quadIndices; // Buffer of indices for the splat quad
 
 
-  SplatSorterAsync      m_cpuSorter;                   // CPU async sorting
-  std::vector<uint32_t> m_splatIndices;                // the array of cpu sorted indices to use for rendering
-  VrdxSorter            m_gpuSorter = VK_NULL_HANDLE;  // GPU radix sort
+		SplatSorterAsync m_cpuSorter; // CPU async sorting
+		std::vector<uint32_t> m_splatIndices; // the array of cpu sorted indices to use for rendering
+		VrdxSorter m_gpuSorter = VK_NULL_HANDLE; // GPU radix sort
 
-  // buffers used by GPU and/or CPU sort
-  nvvk::Buffer m_splatIndicesHost;      // Buffer of splat indices on host for transfers (used by CPU sort)
-  nvvk::Buffer m_splatIndicesDevice;    // Buffer of splat indices on device (used by CPU and GPU sort)
-  nvvk::Buffer m_splatDistancesDevice;  // Buffer of splat indices on device (used by CPU and GPU sort)
-  nvvk::Buffer m_vrdxStorageDevice;     // Used internally by VrdxSorter, GPU sort
+		// buffers used by GPU and/or CPU sort
+		nvvk::Buffer m_splatIndicesHost; // Buffer of splat indices on host for transfers (used by CPU sort)
+		nvvk::Buffer m_splatIndicesDevice; // Buffer of splat indices on device (used by CPU and GPU sort)
+		nvvk::Buffer m_splatDistancesDevice; // Buffer of splat indices on device (used by CPU and GPU sort)
+		nvvk::Buffer m_vrdxStorageDevice; // Used internally by VrdxSorter, GPU sort
 
-  // macro definitions shared by all shaders
-  std::vector<std::pair<std::string, std::string>> m_shaderMacros;
-  // used to load and compile shaders
-  nvslang::SlangCompiler m_slangCompiler{};
+		// macro definitions shared by all shaders
+		std::vector<std::pair<std::string, std::string>> m_shaderMacros;
+		// used to load and compile shaders
+		nvslang::SlangCompiler m_slangCompiler{};
 
-  // The different shaders that are used in the pipelines
-  struct Shaders
-  {
-    // 3D Gaussians Raster
-    VkShaderModule distShader{};
-    VkShaderModule meshShader{};
-    VkShaderModule vertexShader{};
-    VkShaderModule fragmentShader{};
-    VkShaderModule threedgutMeshShader{};
-    VkShaderModule threedgutFragmentShader{};
-    // 3D Meshes raster
-    VkShaderModule meshVertexShader{};
-    VkShaderModule meshFragmentShader{};
-    // for RTX
-    VkShaderModule rtxRgenShader{};    // The ray generator
-    VkShaderModule rtxRmissShader{};   // The miss shader
-    VkShaderModule rtxRmiss2Shader{};  // For shadows (no support yet)
-    VkShaderModule rtxRchitShader{};   // Closest Hit
-    VkShaderModule rtxRahitShader{};   // Any Hit
-    VkShaderModule rtxRintShader{};    // Interrsection
-    // Post processings
-    VkShaderModule postComputeShader{};
-    // Utility storage to process shaders in loop
-    std::vector<VkShaderModule*> modules{};
-    // true if all the shaders are succesfully build
-    bool valid = false;
-  } m_shaders;
+		ReadbackBuffer m_readbackBuffer;
 
-  // 3D Gaussians Pipelines
-  VkPipeline m_computePipelineGsDistCull = VK_NULL_HANDLE;  // The compute pipeline to compute gaussian splats distances to eye and cull
-  VkPipeline m_graphicsPipelineGsVert = VK_NULL_HANDLE;  // The graphic pipeline to rasterize gaussian splats using vertex shaders
-  VkPipeline m_graphicsPipelineGsMesh = VK_NULL_HANDLE;  // The graphic pipeline to rasterize gaussian splats using mesh shaders
-  VkPipeline m_graphicsPipeline3dgutMesh = VK_NULL_HANDLE;  // The graphic pipeline to rasterize 3DGUT splats using mesh shaders
-  // 3D Meshes Pipelines
-  VkPipeline m_graphicsPipelineMesh = VK_NULL_HANDLE;  // The graphic pipeline to rasterize meshes
+		// The different shaders that are used in the pipelines
+		struct Shaders
+		{
+			// 3D Gaussians Raster
+			VkShaderModule distShader{};
+			VkShaderModule meshShader{};
+			VkShaderModule vertexShader{};
+			VkShaderModule fragmentShader{};
+			VkShaderModule threedgutMeshShader{};
+			VkShaderModule threedgutFragmentShader{};
+			// 3D Meshes raster
+			VkShaderModule meshVertexShader{};
+			VkShaderModule meshFragmentShader{};
+			// for RTX
+			VkShaderModule rtxRgenShader{}; // The ray generator
+			VkShaderModule rtxRmissShader{}; // The miss shader
+			VkShaderModule rtxRmiss2Shader{}; // For shadows (no support yet)
+			VkShaderModule rtxRchitShader{}; // Closest Hit
+			VkShaderModule rtxRahitShader{}; // Any Hit
+			VkShaderModule rtxRintShader{}; // Interrsection
+			// Post processings
+			VkShaderModule postComputeShader{};
+			// Utility storage to process shaders in loop
+			std::vector<VkShaderModule*> modules{};
+			// true if all the shaders are succesfully build
+			bool valid = false;
+		} m_shaders;
 
-  // Common to 3D meshes and 3D Gaussians pipeline
-  VkPipelineLayout      m_pipelineLayout      = VK_NULL_HANDLE;  // Raster Pipelines layout
-  VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;  // Descriptor set layout
-  VkDescriptorSet       m_descriptorSet       = VK_NULL_HANDLE;  // Raster Descriptor set
-  VkDescriptorPool      m_descriptorPool      = VK_NULL_HANDLE;  // Raster Descriptor pool
+		// 3D Gaussians Pipelines
+		VkPipeline m_computePipelineGsDistCull = VK_NULL_HANDLE;
+		// The compute pipeline to compute gaussian splats distances to eye and cull
+		VkPipeline m_graphicsPipelineGsVert = VK_NULL_HANDLE;
+		// The graphic pipeline to rasterize gaussian splats using vertex shaders
+		VkPipeline m_graphicsPipelineGsMesh = VK_NULL_HANDLE;
+		// The graphic pipeline to rasterize gaussian splats using mesh shaders
+		VkPipeline m_graphicsPipeline3dgutMesh = VK_NULL_HANDLE;
+		// The graphic pipeline to rasterize 3DGUT splats using mesh shaders
+		// 3D Meshes Pipelines
+		VkPipeline m_graphicsPipelineMesh = VK_NULL_HANDLE; // The graphic pipeline to rasterize meshes
 
-  nvvk::Buffer m_frameInfoBuffer;  // uniform buffer to store frame parameters defined by global variable prmFrame
+		// Common to 3D meshes and 3D Gaussians pipeline
+		VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE; // Raster Pipelines layout
+		VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE; // Descriptor set layout
+		VkDescriptorSet m_descriptorSet = VK_NULL_HANDLE; // Raster Descriptor set
+		VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE; // Raster Descriptor pool
 
-  ///////////////////////////////
-  // Post processing
+		nvvk::Buffer m_frameInfoBuffer; // uniform buffer to store frame parameters defined by global variable prmFrame
 
-  VkPipeline       m_computePipelinePostProcess = VK_NULL_HANDLE;
-  VkPipelineLayout m_pipelineLayoutPostProcess  = VK_NULL_HANDLE;
+		///////////////////////////////
+		// Post processing
 
-  nvvk::DescriptorBindings m_descriptorBindingsPostProcess{};
-  VkDescriptorSetLayout    m_descriptorSetLayoutPostProcess = VK_NULL_HANDLE;
-  VkDescriptorSet          m_descriptorSetPostProcess       = VK_NULL_HANDLE;
-  VkDescriptorPool         m_descriptorPoolPostProcess      = VK_NULL_HANDLE;
-};
+		VkPipeline m_computePipelinePostProcess = VK_NULL_HANDLE;
+		VkPipelineLayout m_pipelineLayoutPostProcess = VK_NULL_HANDLE;
 
-}  // namespace vk_gaussian_splatting
+		nvvk::DescriptorBindings m_descriptorBindingsPostProcess{};
+		VkDescriptorSetLayout m_descriptorSetLayoutPostProcess = VK_NULL_HANDLE;
+		VkDescriptorSet m_descriptorSetPostProcess = VK_NULL_HANDLE;
+		VkDescriptorPool m_descriptorPoolPostProcess = VK_NULL_HANDLE;
+	};
+} // namespace vk_gaussian_splatting
 
 #endif
