@@ -58,13 +58,7 @@
 #define CAMERA_PINHOLE 0
 #define CAMERA_FISHEYE 1
 
-// particle format (PF), RTX
-// not used in shaders (using RTX_USE_AABBS compiler defined instead)
-// used only by UI but here to be easier to find
-#define PARTICLE_FORMAT_ICOSAHEDRON 0
-#define PARTICLE_FORMAT_PARAMETRIC 1
-
-// degree of the splat kernel, RTX
+// degree of the splat kernel
 #define KERNEL_DEGREE_QUINTIC 5
 #define KERNEL_DEGREE_TESSERACTIC 4
 #define KERNEL_DEGREE_CUBIC 3
@@ -91,26 +85,13 @@
 #define BINDING_ROTATIONS_BUFFER 15
 #define BINDING_OPACITY_TEXTURE 16
 #define BINDING_OPACITY_BUFFER 17
-#define BINDING_RTX_PAYLOAD_BUFFER 18
 #define BINDING_MESH_DESCRIPTORS 19
 #define BINDING_LIGHT_SET 20
-
-// bindings for set 1 of RTX
-#define RTX_BINDING_OUTIMAGE 0        // Ray tracer output image
-#define RTX_BINDING_TLAS_SPLATS 1     // Top-level acceleration structure for splats
-#define RTX_BINDING_TLAS_MESH 2       // Top-level acceleration structure for meshes
-#define RTX_BINDING_PAYLOAD_BUFFER 3  // the alternative to payload stack (less efficient)
-#define RTX_BINDING_AUX1 4            // Ray tracer auxiliary output image, when using hybrid mode + temporal sampling
-#define RTX_BINDING_OUTDEPTH 5        // depth buffer
 
 // Temporal sampling mode
 #define TEMPORAL_SAMPLING_AUTO 0  // Detects automatically if TS is needed for best visual results (e.g. if DoF is on)
 #define TEMPORAL_SAMPLING_ENABLED 1   // Force enabled
 #define TEMPORAL_SAMPLING_DISABLED 2  // Force disabled
-
-// bindings for set 0 of Post Process (0 is reserved for BINDING_FRAME_INFO_UBO)
-#define POST_BINDING_MAIN_IMAGE 1  // the image that is presented
-#define POST_BINDING_AUX1_IMAGE 2  // optional aux image to be accumulated (for example)
 
 // location for vertex attributes
 // (only for vertex shader mode)
@@ -172,9 +153,6 @@ struct FrameInfo
 
   float multiplier DEFAULT(1.0f);  // for alternative visualization modes
 
-  int32_t frameSampleId  DEFAULT(0);    // the frame sample index since last frame sampling reset
-  int32_t frameSampleMax DEFAULT(200);  // maximum number of frame after which we stop accumulating frames samples
-
   float focusDist DEFAULT(1.3f);    // focus distance to compute depth of field
   float aperture  DEFAULT(0.001f);  // aperture distance to compute depth of field, 0 does no DOF effect
 };
@@ -219,22 +197,6 @@ struct IndirectParams
   float val8         DEFAULT(0.0);
 };
 
-
-// Push constant specific to raytracing
-struct PushConstantRay
-{
-  // model transformation
-  float4x4 modelMatrix;
-  float4x4 modelMatrixInverse;
-  float4x4 modelMatrixRotScaleInverse;  // inverse of the rotation/scale part of the modelMatrix
-  // stores the geometry of the splat primitive
-  // provisionaly placed here, shall not be in push constant,
-  // rather in some objects description buffer
-  uint64_t vertexAddress;  // Address of the Vertex buffer
-  uint64_t indexAddress;   // Address of the index buffer
-  // set to true will raytrace the mesh depth as a pre-pass
-  bool meshDepthOnly;
-};
 
 #ifdef __cplusplus
 }  // namespace shaderio

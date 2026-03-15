@@ -29,8 +29,6 @@
 #include <glm/vec3.hpp>
 #include <glm/mat4x4.hpp>
 
-#include <nvvk/profiler_vk.hpp>
-
 #include "splat_set.h"
 
 namespace vk_gaussian_splatting {

@@ -730,38 +730,4 @@ void SplatSetVk::deinitTexture(nvvk::Image& texture)
   m_alloc->destroyImage(texture);
 }
 
-/////////////// section related to RTX
-
-
-// Comment from Paper code
-//
-// phi = golden ratio = (1 + sqrt(5)) / 2
-// r = radius of the inscribed circle = 1 = (phi^2 * s) / ( 2 * sqrt(3))
-// s = edge length = ( 2 * sqrt(3) ) / phi^2
-// V = (5/12) * ( 3 + sqrt(5) ) * s^3 = 8.0
-constexpr float goldenRatio   = 1.618033988749895f;  // cast to float discards a bit of precision
-constexpr float icosaEdge     = 1.323169076499215f;  // cast to float discards a bit of precision
-constexpr float icosaVrtScale = 0.5 * icosaEdge;
-
-float kernelScale(float density, float modulatedMinResponse, float kernelDegree, bool adaptiveClamping)
-{
-  const float responseModulation = adaptiveClamping ? density : 1.0f;
-  const float minResponse        = fminf(modulatedMinResponse / responseModulation, 0.97f);
-
-  // linear kernel
-  if(kernelDegree == 0)
-  {
-    return ((1.0f - minResponse) / 3.0f) / -0.329630334487f;
-  }
-
-  /// generalized gaussian of degree b : scaling a = -4.5/3^b
-  /// e^{a*|x|^b}
-  const float b = kernelDegree;
-  const float a = -4.5f / powf(3.0f, static_cast<float>(b));
-  /// find distance r (>0) st e^{a*r^b} = minResponse
-  /// TODO : reshuffle the math to call powf only once
-  return powf(logf(minResponse) / a, 1.0f / b);
-}
-
-
 }  // namespace vk_gaussian_splatting

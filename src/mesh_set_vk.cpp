@@ -59,24 +59,22 @@ bool MeshSetVk::loadModel(const std::filesystem::path& filename)
 
   // Create the buffers on Device and copy vertices, indices and materials
 
-  VkBufferUsageFlags flag            = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-  VkBufferUsageFlags rayTracingFlags =  // used also for building acceleration structures
-      flag | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  VkBufferUsageFlags meshBufferFlags = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
   NVVK_CHECK(m_alloc->createBuffer(model.vertexBuffer, loader.m_vertices.size() * sizeof(ObjVertex),
-                                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | rayTracingFlags));
+                                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | meshBufferFlags));
   NVVK_DBG_NAME(model.vertexBuffer.buffer);
 
   NVVK_CHECK(m_alloc->createBuffer(model.indexBuffer, loader.m_indices.size() * sizeof(uint32_t),
-                                   VK_BUFFER_USAGE_INDEX_BUFFER_BIT | rayTracingFlags));
+                                   VK_BUFFER_USAGE_INDEX_BUFFER_BIT | meshBufferFlags));
   NVVK_DBG_NAME(model.indexBuffer.buffer);
 
   NVVK_CHECK(m_alloc->createBuffer(model.materialsBuffer, loader.m_materials.size() * sizeof(ObjMaterial),
-                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | rayTracingFlags));
+                                   meshBufferFlags));
   NVVK_DBG_NAME(model.materialsBuffer.buffer);
 
   NVVK_CHECK(m_alloc->createBuffer(model.matIndexBuffer, loader.m_matIndices.size() * sizeof(uint32_t),
-                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | rayTracingFlags));
+                                   meshBufferFlags));
   NVVK_DBG_NAME(model.matIndexBuffer.buffer);
 
   // Intializes the buffers and upload

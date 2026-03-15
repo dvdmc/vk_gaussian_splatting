@@ -66,7 +66,6 @@ void GaussianSplattingUI::onAttach(nvapp::Application* app)
   m_ui.enumAdd(GUI_VISUALIZE, VISUALIZE_FINAL, "Final render");
   m_ui.enumAdd(GUI_VISUALIZE, VISUALIZE_CLOCK, "Clock cycles");
   m_ui.enumAdd(GUI_VISUALIZE, VISUALIZE_DEPTH, "Splats depth");
-  m_ui.enumAdd(GUI_VISUALIZE, VISUALIZE_RAYHITS, "Ray Hit Count");
 
   m_ui.enumAdd(GUI_SORTING, SORTING_GPU_SYNC_RADIX, "GPU radix sort");
   m_ui.enumAdd(GUI_SORTING, SORTING_CPU_ASYNC_MULTI, "CPU async std multi");
@@ -75,22 +74,8 @@ void GaussianSplattingUI::onAttach(nvapp::Application* app)
   m_ui.enumAdd(GUI_SH_FORMAT, FORMAT_FLOAT16, "Float 16");
   m_ui.enumAdd(GUI_SH_FORMAT, FORMAT_UINT8, "Uint8");
 
-  m_ui.enumAdd(GUI_PARTICLE_FORMAT, PARTICLE_FORMAT_ICOSAHEDRON, "Icosahedron");
-  m_ui.enumAdd(GUI_PARTICLE_FORMAT, PARTICLE_FORMAT_PARAMETRIC, "AABB + parametric");
-
   m_ui.enumAdd(GUI_CAMERA_TYPE, CAMERA_PINHOLE, "Pinhole");
   m_ui.enumAdd(GUI_CAMERA_TYPE, CAMERA_FISHEYE, "Fisheye");
-
-  m_ui.enumAdd(GUI_TEMPORAL_SAMPLING, TEMPORAL_SAMPLING_AUTO, "Automatic");
-  m_ui.enumAdd(GUI_TEMPORAL_SAMPLING, TEMPORAL_SAMPLING_ENABLED, "Force enabled");
-  m_ui.enumAdd(GUI_TEMPORAL_SAMPLING, TEMPORAL_SAMPLING_DISABLED, "Force disabled");
-
-  m_ui.enumAdd(GUI_KERNEL_DEGREE, KERNEL_DEGREE_QUINTIC, "5 (Quintic)");
-  m_ui.enumAdd(GUI_KERNEL_DEGREE, KERNEL_DEGREE_TESSERACTIC, "4 (Tesseractic)");
-  m_ui.enumAdd(GUI_KERNEL_DEGREE, KERNEL_DEGREE_CUBIC, "3 (Cubic)");
-  m_ui.enumAdd(GUI_KERNEL_DEGREE, KERNEL_DEGREE_QUADRATIC, "2 (Quadratic)");
-  m_ui.enumAdd(GUI_KERNEL_DEGREE, KERNEL_DEGREE_LAPLACIAN, "1 (Laplacian)");
-  m_ui.enumAdd(GUI_KERNEL_DEGREE, KERNEL_DEGREE_LINEAR, "0 (Linear)");
 
   m_ui.enumAdd(GUI_LIGHT_TYPE, LIGHT_TYPE_POINT, "Point");
   m_ui.enumAdd(GUI_LIGHT_TYPE, LIGHT_TYPE_DIRECTIONAL, "Directional");
@@ -111,15 +96,6 @@ void GaussianSplattingUI::onAttach(nvapp::Application* app)
   m_ui.enumAdd(GUI_MESH_SHADER_WG_SIZE, 32, "32");
   m_ui.enumAdd(GUI_MESH_SHADER_WG_SIZE, 16, "16");
   m_ui.enumAdd(GUI_MESH_SHADER_WG_SIZE, 8, "8");
-
-  m_ui.enumAdd(GUI_RAY_HIT_PER_PASS, 128, "128");
-  m_ui.enumAdd(GUI_RAY_HIT_PER_PASS, 64, "64");
-  m_ui.enumAdd(GUI_RAY_HIT_PER_PASS, 32, "32");
-  m_ui.enumAdd(GUI_RAY_HIT_PER_PASS, 20, "20");
-  m_ui.enumAdd(GUI_RAY_HIT_PER_PASS, 18, "18");
-  m_ui.enumAdd(GUI_RAY_HIT_PER_PASS, 16, "16");
-  m_ui.enumAdd(GUI_RAY_HIT_PER_PASS, 8, "8");
-  m_ui.enumAdd(GUI_RAY_HIT_PER_PASS, 4, "4");
 }
 
 void GaussianSplattingUI::onDetach()
@@ -183,7 +159,7 @@ void GaussianSplattingUI::onUIRender()
      && m_plyLoader.getStatus() == PlyLoaderAsync::State::E_READY)
   {
     const std::vector<std::filesystem::path> defaultSearchPaths = getResourcesDirs();
-    prmScene.sceneToLoadFilename = nvutils::findFile("D:/point_cloud_30000.ply", defaultSearchPaths).string();
+    prmScene.sceneToLoadFilename = nvutils::findFile("flowers_1/flowers_1.ply", defaultSearchPaths).string();
     prmScene.enableDefaultScene  = false;
   }
 #endif

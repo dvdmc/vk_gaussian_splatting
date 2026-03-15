@@ -34,11 +34,8 @@
 #include <nvvk/check_error.hpp>
 #include <nvvk/descriptors.hpp>
 #include <nvvk/graphics_pipeline.hpp>
-#include <nvvk/sbt_generator.hpp>
 #include <nvvk/formats.hpp>
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
 
 namespace vk_gaussian_splatting
 {
@@ -87,11 +84,10 @@ namespace vk_gaussian_splatting
 		// GBuffer
 		m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
-		// Two GBuffer color attachments, the second one is used only when temporal sampling with 3DGUT
     for(nvvk::GBuffer& buffer: m_gBuffers)
       buffer.init({
 			.allocator = &m_alloc,
-			.colorFormats = {m_colorFormat, m_colorFormat},
+			.colorFormats = {m_colorFormat},
 			.depthFormat = m_depthFormat,
 			.imageSampler = m_sampler,
 			.descriptorPool = m_app->getTextureDescriptorPool(),
@@ -167,8 +163,6 @@ namespace vk_gaussian_splatting
 		updateReadbackBuffer(m_device, m_app->getPhysicalDevice(),
 		                     VkDeviceSize(viewportSize.width) * viewportSize.height * pixelSize, m_readbackBuffer);
 
-		updateDescriptorSetPostProcessing();
-		resetFrameCounter();
 	}
 
 	void GaussianSplatting::onRender(VkCommandBuffer cmd)
@@ -215,7 +209,7 @@ namespace vk_gaussian_splatting
     }
 
     // In which color buffer are we going to render ?
-    uint32_t colorBufferId = COLOR_MAIN;
+    uint32_t colorBufferId = 0;
 
     nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getDepthImage(),
                                       VK_IMAGE_LAYOUT_UNDEFINED,  // or previous
@@ -308,18 +302,16 @@ namespace vk_gaussian_splatting
 
 	void GaussianSplatting::processUpdateRequests(void)
 	{
-		bool needUpdate = m_requestUpdateSplatData || m_requestUpdateSplatAs || m_requestUpdateMeshData
+		bool needUpdate = m_requestUpdateSplatData || m_requestUpdateMeshData
 			|| m_requestUpdateShaders || m_requestUpdateLightsBuffer || m_requestDeleteSelectedMesh;
 
 		if (!m_splatSet.size() || !needUpdate)
 			return;
 
-		resetFrameCounter();
-
 		vkDeviceWaitIdle(m_device);
 
 		// updates that requires update of descriptor sets
-		if (m_requestUpdateSplatData || m_requestUpdateSplatAs || m_requestUpdateMeshData || m_requestUpdateShaders ||
+		if (m_requestUpdateSplatData || m_requestUpdateMeshData || m_requestUpdateShaders ||
 			m_requestDeleteSelectedMesh)
 		{
 			deinitPipelines();
@@ -345,8 +337,6 @@ namespace vk_gaussian_splatting
 			if (initShaders())
 			{
 				initPipelines();
-				initDescriptorSetPostProcessing();
-				initPipelinePostProcessing();
 			}
 		}
 
@@ -359,7 +349,7 @@ namespace vk_gaussian_splatting
 		}
 
 		// reset request
-		m_requestUpdateSplatData = m_requestUpdateSplatAs = m_requestUpdateMeshData = m_requestUpdateShaders =
+		m_requestUpdateSplatData = m_requestUpdateMeshData = m_requestUpdateShaders =
 			m_requestUpdateLightsBuffer = m_requestDeleteSelectedMesh = false;
 	}
 
@@ -779,13 +769,6 @@ namespace vk_gaussian_splatting
 		m_splatSetVk.initDataStorage(m_splatSet, prmData.dataStorage, prmData.shFormat);
 		initPipelines();
 
-		// RTX specifics
-
-
-		// Post processing
-		initDescriptorSetPostProcessing();
-		initPipelinePostProcessing();
-
 		return true;
 	}
 
@@ -882,9 +865,6 @@ namespace vk_gaussian_splatting
 		// Mesh raster
 		success &= compileSlangShader("threedmesh_raster.vert.slang", m_shaders.meshVertexShader);
 		success &= compileSlangShader("threedmesh_raster.frag.slang", m_shaders.meshFragmentShader);
-
-		// Post processings
-		success &= compileSlangShader("post.comp.slang", m_shaders.postComputeShader);
 
 		if (!success)
 			return (m_shaders.valid = false);
@@ -1298,7 +1278,6 @@ namespace vk_gaussian_splatting
 		}
 	}
 
-	// include RTX one
 	void GaussianSplatting::deinitPipelines()
 	{
 		if (m_graphicsPipelineGsVert == VK_NULL_HANDLE)
@@ -1318,17 +1297,6 @@ namespace vk_gaussian_splatting
 		TEST_DESTROY_AND_RESET(m_descriptorSetLayout,
 		                       vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr));
 		TEST_DESTROY_AND_RESET(m_descriptorPool, vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr));
-
-		// Post process
-		TEST_DESTROY_AND_RESET(m_computePipelinePostProcess,
-		                       vkDestroyPipeline(m_device, m_computePipelinePostProcess, nullptr));
-
-		TEST_DESTROY_AND_RESET(m_pipelineLayoutPostProcess,
-		                       vkDestroyPipelineLayout(m_device, m_pipelineLayoutPostProcess, nullptr));
-		TEST_DESTROY_AND_RESET(m_descriptorPoolPostProcess,
-		                       vkDestroyDescriptorPool(m_device, m_descriptorPoolPostProcess, nullptr));
-		TEST_DESTROY_AND_RESET(m_descriptorSetLayoutPostProcess,
-		                       vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayoutPostProcess, nullptr));
 	}
 
 	void GaussianSplatting::initRendererBuffers()
@@ -1447,139 +1415,4 @@ namespace vk_gaussian_splatting
 		m_alloc.destroyBuffer(m_frameInfoBuffer);
 	}
 
-	/////////////////////////////////////////////
-	/// RTX
-
-
-	//--------------------------------------------------------------------------------------------------
-	// Ray Tracing the scene
-
-
-	bool GaussianSplatting::updateFrameCounter()
-	{
-		static float ref_fov{0};
-		static glm::mat4 ref_cam_matrix;
-
-		const auto& m = cameraManip->getViewMatrix();
-		const auto fov = cameraManip->getFov();
-
-		if (ref_cam_matrix != m || ref_fov != fov)
-		{
-			resetFrameCounter();
-			ref_cam_matrix = m;
-			ref_fov = fov;
-		}
-
-		if (prmFrame.frameSampleId >= prmFrame.frameSampleMax)
-		{
-			return false;
-		}
-		prmFrame.frameSampleId++;
-		return true;
-	}
-
-	///////////////////////////////////
-	// Post processings
-
-	void GaussianSplatting::initDescriptorSetPostProcessing()
-	{
-		// Descriptor Bindings
-		m_descriptorBindingsPostProcess.clear();
-		m_descriptorBindingsPostProcess.addBinding(
-			BINDING_FRAME_INFO_UBO, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-		m_descriptorBindingsPostProcess.addBinding(
-			POST_BINDING_MAIN_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-		m_descriptorBindingsPostProcess.addBinding(
-			POST_BINDING_AUX1_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-		NVVK_CHECK(
-			m_descriptorBindingsPostProcess.createDescriptorSetLayout(m_device, 0, &m_descriptorSetLayoutPostProcess));
-		NVVK_DBG_NAME(m_descriptorSetLayoutPostProcess);
-
-		// Descriptor Pool
-		std::vector<VkDescriptorPoolSize> poolSize;
-		m_descriptorBindingsPostProcess.appendPoolSizes(poolSize);
-		VkDescriptorPoolCreateInfo poolInfo = {
-			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-			.maxSets = 1,
-			.poolSizeCount = uint32_t(poolSize.size()),
-			.pPoolSizes = poolSize.data(),
-		};
-		NVVK_CHECK(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPoolPostProcess));
-		NVVK_DBG_NAME(m_descriptorPoolPostProcess);
-
-		// Descriptor Set
-		VkDescriptorSetAllocateInfo allocInfo = {
-			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-			.descriptorPool = m_descriptorPoolPostProcess,
-			.descriptorSetCount = 1,
-			.pSetLayouts = &m_descriptorSetLayoutPostProcess,
-		};
-		NVVK_CHECK(vkAllocateDescriptorSets(m_device, &allocInfo, &m_descriptorSetPostProcess));
-		NVVK_DBG_NAME(m_descriptorSetPostProcess);
-
-		// Pipelne layout
-		const VkPushConstantRange pcRanges = {
-			VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
-			| VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_COMPUTE_BIT,
-			0, sizeof(shaderio::PushConstant)
-		};
-
-		VkPipelineLayoutCreateInfo plCreateInfo{
-			.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-			.setLayoutCount = 1,
-			.pSetLayouts = &m_descriptorSetLayoutPostProcess,
-			.pushConstantRangeCount = 1,
-			.pPushConstantRanges = &pcRanges,
-		};
-		NVVK_CHECK(vkCreatePipelineLayout(m_device, &plCreateInfo, nullptr, &m_pipelineLayoutPostProcess));
-		NVVK_DBG_NAME(m_pipelineLayoutPostProcess);
-
-		// Writes
-		nvvk::WriteSetContainer writeContainer;
-		writeContainer.append(
-			m_descriptorBindingsPostProcess.getWriteSet(BINDING_FRAME_INFO_UBO, m_descriptorSetPostProcess),
-			m_frameInfoBuffer);
-		writeContainer.append(
-			m_descriptorBindingsPostProcess.getWriteSet(POST_BINDING_MAIN_IMAGE, m_descriptorSetPostProcess),
-			m_gBuffers[0].getColorImageView(COLOR_MAIN), VK_IMAGE_LAYOUT_GENERAL);
-		writeContainer.append(
-			m_descriptorBindingsPostProcess.getWriteSet(POST_BINDING_AUX1_IMAGE, m_descriptorSetPostProcess),
-                          m_gBuffers[0].getColorImageView(COLOR_AUX1), VK_IMAGE_LAYOUT_GENERAL);
-		vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writeContainer.size()), writeContainer.data(), 0,
-		                       nullptr);
-	}
-
-	void GaussianSplatting::updateDescriptorSetPostProcessing()
-	{
-		// update only if the descriptor set is already initialized
-		if (m_descriptorSetPostProcess != VK_NULL_HANDLE)
-		{
-			nvvk::WriteSetContainer writeContainer;
-			writeContainer.append(
-				m_descriptorBindingsPostProcess.getWriteSet(POST_BINDING_MAIN_IMAGE, m_descriptorSetPostProcess),
-                            m_gBuffers[0].getColorImageView(COLOR_MAIN), VK_IMAGE_LAYOUT_GENERAL);
-			writeContainer.append(
-				m_descriptorBindingsPostProcess.getWriteSet(POST_BINDING_AUX1_IMAGE, m_descriptorSetPostProcess),
-                            m_gBuffers[0].getColorImageView(COLOR_AUX1), VK_IMAGE_LAYOUT_GENERAL);
-			vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writeContainer.size()), writeContainer.data(), 0,
-			                       nullptr);
-		}
-	}
-
-	void GaussianSplatting::initPipelinePostProcessing()
-	{
-		VkComputePipelineCreateInfo pipelineInfo{
-			.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-			.stage =
-			{
-				.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-				.stage = VK_SHADER_STAGE_COMPUTE_BIT,
-				.module = m_shaders.postComputeShader,
-				.pName = "main",
-			},
-			.layout = m_pipelineLayoutPostProcess,
-		};
-		vkCreateComputePipelines(m_device, {}, 1, &pipelineInfo, nullptr, &m_computePipelinePostProcess);
-		NVVK_DBG_NAME(m_computePipelinePostProcess);
-	}
 } // namespace vk_gaussian_splatting

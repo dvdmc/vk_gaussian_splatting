@@ -61,16 +61,12 @@
 #include <nvvk/validation_settings.hpp>
 #include <nvvk/sampler_pool.hpp>
 #include <nvvk/default_structs.hpp>
-#include <nvvk/profiler_vk.hpp>
-#include <nvvk/acceleration_structures.hpp>
 #include <nvvk/descriptors.hpp>
-#include <nvvk/sbt_generator.hpp>
 
 #include <nvvkglsl/glsl.hpp>
 
 #include <nvapp/application.hpp>
 #include <nvapp/elem_camera.hpp>
-#include <nvapp/elem_profiler.hpp>
 #include <nvapp/elem_sequencer.hpp>
 #include <nvapp/elem_default_title.hpp>
 #include <nvapp/elem_default_menu.hpp>
@@ -148,14 +144,10 @@ private:
     GUI_CAMERA_TYPE,          // type of camera
     GUI_FRUSTUM_CULLING,      // where to perform frustum culling (or disabled)
     GUI_SH_FORMAT,            // data format for storage of SH in VRAM
-    GUI_PARTICLE_FORMAT,      // Particle tracing mode for RTX
-    GUI_KERNEL_DEGREE,        // Kernel degree for RTX
     GUI_VISUALIZE,            // visualization mode
     GUI_ILLUM_MODEL,          // TODO rename, "illumination" model is not the proper name
     GUI_DIST_SHADER_WG_SIZE,  // Distance shader workgroup size
     GUI_MESH_SHADER_WG_SIZE,  // Mesh shader workgroup size
-    GUI_RAY_HIT_PER_PASS,     // Max number of ray hits stored per pass (payload array size)
-    GUI_TEMPORAL_SAMPLING,    // Temporal sampling mode
     GUI_LIGHT_TYPE,           // Type of light
     GUI_EXTENT_METHOD         // extent projection method
   };

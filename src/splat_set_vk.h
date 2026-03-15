@@ -30,7 +30,6 @@
 #include <nvvk/staging.hpp>
 #include <nvvk/resources.hpp>
 #include <nvvk/resource_allocator.hpp>
-#include <nvvk/acceleration_structures.hpp>
 #include <nvvk/physical_device.hpp>
 
 #include "splat_set.h"

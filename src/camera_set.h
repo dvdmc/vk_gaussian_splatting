@@ -31,7 +31,6 @@
 #include <nvvk/resource_allocator.hpp>
 #include <nvvk/debug_util.hpp>
 #include <nvvk/staging.hpp>
-#include <nvvk/acceleration_structures.hpp>
 
 #include <nvutils/camera_manipulator.hpp>
 

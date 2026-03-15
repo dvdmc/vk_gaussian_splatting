@@ -28,7 +28,6 @@
 #include <nvvk/resource_allocator.hpp>
 #include <nvvk/debug_util.hpp>
 #include <nvvk/staging.hpp>
-#include <nvvk/acceleration_structures.hpp>
 
 #include "shaderio.h"
 
@@ -88,12 +87,10 @@ public:
   }
 
   // load model from file, add it to the model set and upload to VRAM
-  // for convenience RTX acceleration structures are also updated
   bool loadModel(const std::filesystem::path& filename);
 
   inline void deinitDataStorage()
   {
-    // all data common to RTX and raster
     for(auto& mesh : meshes)
     {
       deinitMeshBuffers(mesh);
@@ -113,13 +110,11 @@ public:
   void updateObjMaterialsBuffer(int modelIndex);
 
   // delete an instance, and its related mesh and material if last instance using it.
-  // object descriptions buffer and rtx acceleration structures must be updated afterward
   void deleteInstance(uint32_t instanceId);
 
 private:
   void deinitMeshBuffers(Mesh& mesh)
   {
-    // all data common to RTX and raster
     m_alloc->destroyBuffer(mesh.vertexBuffer);
     m_alloc->destroyBuffer(mesh.indexBuffer);
     m_alloc->destroyBuffer(mesh.materialsBuffer);

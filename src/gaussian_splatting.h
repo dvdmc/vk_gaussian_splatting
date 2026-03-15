@@ -60,17 +60,13 @@
 #include <nvvk/validation_settings.hpp>
 #include <nvvk/sampler_pool.hpp>
 #include <nvvk/default_structs.hpp>
-#include <nvvk/profiler_vk.hpp>
-#include <nvvk/acceleration_structures.hpp>
 #include <nvvk/descriptors.hpp>
-#include <nvvk/sbt_generator.hpp>
 
 #include <nvvkglsl/glsl.hpp>
 #include <nvslang/slang.hpp>
 
 #include <nvapp/application.hpp>
 #include <nvapp/elem_camera.hpp>
-#include <nvapp/elem_profiler.hpp>
 #include <nvapp/elem_sequencer.hpp>
 #include <nvapp/elem_default_title.hpp>
 #include <nvapp/elem_default_menu.hpp>
@@ -127,10 +123,6 @@ namespace vk_gaussian_splatting
 
 		void onResize(VkCommandBuffer cmd, const VkExtent2D& size);
 
-		// reset frame counter for temporal accumulated multi-sampling
-		// will cause a restart of the frame construction
-		inline void resetFrameCounter() { prmFrame.frameSampleId = -1; }
-
 		void onRender(VkCommandBuffer cmd);
 
 		// reset the rendering settings that can
@@ -159,7 +151,7 @@ namespace vk_gaussian_splatting
 		// init the raster pipelines
 		void initPipelines();
 
-		// deinit raster and rtx pipelines TODO move rtx in separate method
+		// deinit raster pipelines
 		void deinitPipelines();
 
 		void initRendererBuffers();
@@ -201,18 +193,6 @@ namespace vk_gaussian_splatting
 		// read back updated indirect parameters from m_indirect into m_indirectReadbackHost
 		void readBackIndirectParametersIfNeeded(VkCommandBuffer cmd);
 
-		//////////////
-		// RTX specific
-
-		// updates the frame counter and returns true if a new raytracing pass is needed
-		bool updateFrameCounter();
-
-		//////////////
-		// Post processing
-
-		void initDescriptorSetPostProcessing();
-		void updateDescriptorSetPostProcessing();
-		void initPipelinePostProcessing();
 
 	protected:
 		// name of the loaded scene if load is successfull
@@ -245,10 +225,6 @@ namespace vk_gaussian_splatting
 		// trigger a rebuild of the data in VRAM (textures or buffers) at next frame
 		// also triggers shaders and pipeline rebuild
 		bool m_requestUpdateSplatData = false;
-		// trigger a rebuild of the splat set RTX Acceleration Structure at next frame
-		bool m_requestUpdateSplatAs = false;
-		// request delayed update of Acceleration Structures if not using ray tracing
-		bool m_requestDelayedUpdateSplatAs = false;
 		// trigger a rebuild of the shaders and pipelines at next frame
 		bool m_requestUpdateShaders = false;
 		// trigger the reinit of mesh acceleration structures at next frame
@@ -271,14 +247,7 @@ namespace vk_gaussian_splatting
 		VkClearColorValue m_clearColor = {{0.0F, 0.0F, 0.0F, 0.0F}}; // Clear color
 		VkDevice m_device = VK_NULL_HANDLE; // Convenient sortcut to device
 
-		// Convenient enum to dereference color buffers in GBuffers
-		enum
-		{
-			COLOR_MAIN = 0,
-			COLOR_AUX1 = 1,
-		};
-
-		// G-Buffers: 2 color buffers + 1 depth buffer
+		// G-Buffers: 1 color buffer + 1 depth buffer
 		nvvk::GBuffer m_gBuffers[2];
 
 		// camera info for current frame, updated by onRender
@@ -327,15 +296,6 @@ namespace vk_gaussian_splatting
 			// 3D Meshes raster
 			VkShaderModule meshVertexShader{};
 			VkShaderModule meshFragmentShader{};
-			// for RTX
-			VkShaderModule rtxRgenShader{}; // The ray generator
-			VkShaderModule rtxRmissShader{}; // The miss shader
-			VkShaderModule rtxRmiss2Shader{}; // For shadows (no support yet)
-			VkShaderModule rtxRchitShader{}; // Closest Hit
-			VkShaderModule rtxRahitShader{}; // Any Hit
-			VkShaderModule rtxRintShader{}; // Interrsection
-			// Post processings
-			VkShaderModule postComputeShader{};
 			// Utility storage to process shaders in loop
 			std::vector<VkShaderModule*> modules{};
 			// true if all the shaders are succesfully build
@@ -362,16 +322,6 @@ namespace vk_gaussian_splatting
 
 		nvvk::Buffer m_frameInfoBuffer; // uniform buffer to store frame parameters defined by global variable prmFrame
 
-		///////////////////////////////
-		// Post processing
-
-		VkPipeline m_computePipelinePostProcess = VK_NULL_HANDLE;
-		VkPipelineLayout m_pipelineLayoutPostProcess = VK_NULL_HANDLE;
-
-		nvvk::DescriptorBindings m_descriptorBindingsPostProcess{};
-		VkDescriptorSetLayout m_descriptorSetLayoutPostProcess = VK_NULL_HANDLE;
-		VkDescriptorSet m_descriptorSetPostProcess = VK_NULL_HANDLE;
-		VkDescriptorPool m_descriptorPoolPostProcess = VK_NULL_HANDLE;
 	};
 } // namespace vk_gaussian_splatting
 
