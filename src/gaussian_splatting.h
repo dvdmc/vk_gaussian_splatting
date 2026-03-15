@@ -90,6 +90,7 @@
 #include "mesh_set_vk.h"
 #include "light_set_vk.h"
 #include "camera_set.h"
+#include "gltf_rasterizer.h"
 
 namespace vk_gaussian_splatting
 {
@@ -111,6 +112,14 @@ namespace vk_gaussian_splatting
 		std::vector<glm::vec3> cameraPositions = {glm::vec3(10.0f), glm::vec3(10.0f, .0f, .0f) };
 		int                    activeCamera    = 1;
 		std::vector<unsigned char> image;
+
+		// Load a GLTF scene for compositing with splats.
+		// Safe to call after application.addElement() (which invokes onAttach).
+		void loadGltfScene(const std::filesystem::path& path);
+
+		// Load an HDR environment map.
+		// Safe to call after application.addElement() (which invokes onAttach).
+		void loadHdr(const std::filesystem::path& path);
 
 	protected:
 		GaussianSplatting();
@@ -198,6 +207,10 @@ namespace vk_gaussian_splatting
 		// name of the loaded scene if load is successfull
 		std::filesystem::path m_loadedSceneFilename;
 
+		// Paths of loaded GLTF scene and HDR map (set by loadGltfScene / loadHdr)
+		std::filesystem::path m_loadedGltfFilename;
+		std::filesystem::path m_loadedHdrFilename;
+
 		// scene loader
 		PlyLoaderAsync m_plyLoader;
 		// 3DGS/3DGRT model in RAM
@@ -206,6 +219,8 @@ namespace vk_gaussian_splatting
 		SplatSetVk m_splatSetVk = {};
 		// Set of meshes in VRAM
 		MeshSetVk m_meshSetVk = {};
+		// GLTF scene rasterizer (replaces OBJ mesh pipeline)
+		GltfRasterizer m_gltfRasterizer;
 		// Set of lights in RAM and VRAM
 		LightSetVk m_lightSet = {};
 		// Set of cameras in RAM

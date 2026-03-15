@@ -18,6 +18,8 @@
  */
 
 #include <gaussian_splatting_ui.h>
+#include <nvutils/parameter_parser.hpp>
+#include <nvutils/parameter_registry.hpp>
 
 using namespace vk_gaussian_splatting;
 
@@ -30,6 +32,19 @@ int main(int argc, char** argv)
   nvvk::ContextInitInfo        vkSetup;    // Information to create the Vulkan context
   nvapp::Application           application;
   nvapp::ApplicationCreateInfo appInfo;  // Information to create the application
+
+  /////////////////////////////////
+  // Command-line parameters
+  std::filesystem::path gltfFilename{};
+  std::filesystem::path hdrFilename{};
+
+  nvutils::ParameterRegistry paramRegistry;
+  paramRegistry.add({"gltf", "GLTF/GLB scene file to load"}, {".gltf", ".glb"}, &gltfFilename);
+  paramRegistry.add({"hdr", "HDR environment map to load"}, {".hdr", ".exr"}, &hdrFilename);
+
+  nvutils::ParameterParser cli(nvutils::getExecutablePath().stem().string());
+  cli.add(paramRegistry);
+  cli.parse(argc, argv);
 
   /////////////////////////////////
   // Create elements of the application, including the core of the sample (gaussianSplatting)
@@ -63,6 +78,11 @@ int main(int argc, char** argv)
 
   VkPhysicalDeviceShaderClockFeaturesKHR clockFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CLOCK_FEATURES_KHR};
   vkSetup.deviceExtensions.emplace_back(VK_KHR_SHADER_CLOCK_EXTENSION_NAME, &clockFeatures);
+
+  static VkPhysicalDeviceShaderObjectFeaturesEXT shaderObjectFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT,
+  };
+  vkSetup.deviceExtensions.emplace_back(VK_EXT_SHADER_OBJECT_EXTENSION_NAME, &shaderObjectFeatures);
 
   if(!appInfo.headless)
   {
@@ -107,6 +127,14 @@ int main(int argc, char** argv)
   application.addElement(elemCamera);
 
   application.addElement(std::make_shared<nvgpu_monitor::ElementGpuMonitor>());
+
+  // Load GLTF scene and HDR environment if specified on the command line.
+  // This is done after addElement (which calls onAttach and initializes the rasterizer)
+  // but before run(), following the same pattern as vk_gltf_renderer.
+  if(!gltfFilename.empty())
+    gaussianSplatting->loadGltfScene(gltfFilename);
+  if(!hdrFilename.empty())
+    gaussianSplatting->loadHdr(hdrFilename);
 
   //
   application.run();

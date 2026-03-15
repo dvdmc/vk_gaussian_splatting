@@ -149,7 +149,6 @@ void GaussianSplattingUI::onUIRender()
     ImGui::PopStyleVar();
   }
 
-
   /////////////////
   // Handle scene loading
 
@@ -280,6 +279,7 @@ void GaussianSplattingUI::onUIRender()
     ImGui::EndPopup();
   }
 }
+
 
 void GaussianSplattingUI::getImage(int cameraIndex)
 {

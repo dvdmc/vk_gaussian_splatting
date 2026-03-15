@@ -6,6 +6,7 @@ Project(${PROJECT_NAME} LANGUAGES C CXX)
 
 # Add the cmake folder to the module path
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+option(NVPRO2_ENABLE_nvvkgltf "" ON)
 find_package(NvproCore2 REQUIRED)
 
 # set with -DDISABLE_DEFAULT_SCENE=ON on command line or use cmake-gui to set the parameter
@@ -69,12 +70,33 @@ file(GLOB SOURCE_FILES src/*.*)
 file(GLOB SHADER_FILES shaders/*.slang shaders/*.h)
 file(GLOB EXTERN_FILES 3rdparty/miniply/*.*)
 
+#####################################################################################
+# Compile Slang shaders to embedded headers
+#
+
+set(SHADER_SLANG_FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gltf_raster.slang
+  ${NVSHADERS_DIR}/nvshaders/sky_physical.slang
+  ${NVSHADERS_DIR}/nvshaders/hdr_prefilter_diffuse.slang
+  ${NVSHADERS_DIR}/nvshaders/hdr_prefilter_glossy.slang
+  ${NVSHADERS_DIR}/nvshaders/hdr_dome.slang
+  ${NVSHADERS_DIR}/nvshaders/hdr_integrate_brdf.slang
+)
+
+compile_slang(
+  "${SHADER_SLANG_FILES}"
+  "${CMAKE_BINARY_DIR}/${PROJECT_NAME}/_autogen"
+  GENERATED_SHADER_HEADERS
+  EXTRA_FLAGS "-I${NVSHADERS_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+)
+
 include_directories(
-  ${CMAKE_CURRENT_SOURCE_DIR}/src 
-  ${CMAKE_CURRENT_SOURCE_DIR}/shaders 
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/shaders
   ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/miniply
   ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/vrdx
-  ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/spz/src/cc)
+  ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/spz/src/cc
+  ${CMAKE_BINARY_DIR}/${PROJECT_NAME}/_autogen)
 
 #####################################################################################
 # Executable
@@ -111,10 +133,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   nvpro2::nvshaders_host
   nvpro2::nvutils
   nvpro2::nvvk
+  nvpro2::nvvkgltf
   nvpro2::nvgpu_monitor
   vk_radix_sort
   spz::spz
 )
+
+target_sources(${PROJECT_NAME} PRIVATE ${GENERATED_SHADER_HEADERS})
 
 add_project_definitions(${PROJECT_NAME})
 

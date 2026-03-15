@@ -120,6 +120,9 @@ namespace vk_gaussian_splatting
 		m_splatSetVk.init(m_app, &m_alloc, &m_uploader, &m_sampler, &m_physicalDeviceInfo);
 		m_meshSetVk.init(m_app, &m_alloc, &m_uploader);
 		m_cameraSet.init(cameraManip.get());
+
+		// Initialize the GLTF rasterizer
+		m_gltfRasterizer.init(m_app, &m_alloc, &m_samplerPool, m_colorFormat, m_depthFormat);
 	};
 
 	void GaussianSplatting::onDetach()
@@ -130,6 +133,7 @@ namespace vk_gaussian_splatting
 		// release scene and rendering related resources
 		deinitAll();
 		// release application wide related resources
+		m_gltfRasterizer.deinit();
 		m_splatSetVk.deinit();
 		m_meshSetVk.deinit();
 		for(nvvk::GBuffer& gBuffer : m_gBuffers)
@@ -146,11 +150,25 @@ namespace vk_gaussian_splatting
 		m_readbackBuffer = {};
 	}
 
+	void GaussianSplatting::loadGltfScene(const std::filesystem::path& path)
+	{
+		if(!path.empty() && m_gltfRasterizer.loadGltfScene(path))
+			m_loadedGltfFilename = path;
+	}
+
+	void GaussianSplatting::loadHdr(const std::filesystem::path& path)
+	{
+		if(!path.empty() && m_gltfRasterizer.loadHdr(path))
+			m_loadedHdrFilename = path;
+	}
+
 	void GaussianSplatting::onResize(VkCommandBuffer cmd, const VkExtent2D& viewportSize)
 	{
 		m_viewSize = {viewportSize.width, viewportSize.height};
 		for(nvvk::GBuffer& gBuffer : m_gBuffers)
 			NVVK_CHECK(gBuffer.update(cmd, viewportSize));
+
+		// (GLTF rasterizer updates its output image descriptor per-frame in draw())
 
 		// destroy old readback buffer
 		if (m_readbackBuffer.buffer)
@@ -216,6 +234,17 @@ namespace vk_gaussian_splatting
                                       VK_IMAGE_LAYOUT_GENERAL,    // for ray tracing writes
                                       {VK_IMAGE_ASPECT_DEPTH_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS}});
 
+    // Draw GLTF scene + environment (sky/HDR) before the splat pass.
+    // Both images are in GENERAL on entry and will be returned in GENERAL.
+    // The splat pass then uses LOAD to composite on top.
+    {
+      glm::mat4 view = cameraManip->getViewMatrix();
+      glm::mat4 proj = cameraManip->getPerspectiveMatrix();
+      m_gltfRasterizer.draw(cmd, gBuffer.getSize(),
+                            gBuffer.getColorImage(colorBufferId), gBuffer.getColorImageView(colorBufferId),
+                            gBuffer.getDepthImage(), gBuffer.getDepthImageView(),
+                            view, proj);
+    }
 
     // Drawing the primitives in the G-Buffer
     {
@@ -225,11 +254,15 @@ namespace vk_gaussian_splatting
 
       VkRenderingAttachmentInfo colorAttachment = DEFAULT_VkRenderingAttachmentInfo;
       colorAttachment.imageView                 = gBuffer.getColorImageView(colorBufferId);
-      colorAttachment.clearValue                = {m_clearColor};
+      // LOAD: GLTF/sky already rendered into this image; splats composite on top
+      colorAttachment.loadOp     = VK_ATTACHMENT_LOAD_OP_LOAD;
+      colorAttachment.clearValue = {m_clearColor};
       VkRenderingAttachmentInfo depthAttachment = DEFAULT_VkRenderingAttachmentInfo;
-
       depthAttachment.imageView  = gBuffer.getDepthImageView();
       depthAttachment.clearValue = {.depthStencil = DEFAULT_VkClearDepthStencilValue};
+      // LOAD depth when GLTF scene rendered geometry (so splats respect GLTF occlusion)
+      if(m_gltfRasterizer.hasScene())
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 
       // Create the rendering info
       VkRenderingInfo renderingInfo      = DEFAULT_VkRenderingInfo;
@@ -251,13 +284,7 @@ namespace vk_gaussian_splatting
       vkCmdSetViewportWithCount(cmd, 1, &viewport);
       vkCmdSetScissorWithCount(cmd, 1, &scissor);
 
-      // mesh first so that occluded splats fragments will be discarded by depth test
-      if(m_shaders.valid && !m_meshSetVk.instances.empty())
-      {
-        drawMeshPrimitives(cmd);
-      }
-
-      // splat set
+      // splat set (OBJ mesh pipeline removed; GLTF rendered above)
       if(m_shaders.valid && splatCount)
       {
         drawSplatPrimitives(cmd, splatCount);
@@ -265,28 +292,33 @@ namespace vk_gaussian_splatting
 
       vkCmdEndRendering(cmd);
 
-      nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId),
-                                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL});
+      if(m_readbackBuffer.buffer != VK_NULL_HANDLE)
+      {
+        nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId),
+                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL});
 
-      VkBufferImageCopy region{};
-      region.bufferOffset                    = 0;
-      region.bufferRowLength                 = 0;
-      region.bufferImageHeight               = 0;
-      region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-      region.imageSubresource.mipLevel       = 0;
-      region.imageSubresource.baseArrayLayer = 0;
-      region.imageSubresource.layerCount     = 1;
-      region.imageOffset                     = {0, 0, 0};
-      region.imageExtent                     = {gBuffer.getSize().width, gBuffer.getSize().height, 1};
+        VkBufferImageCopy region{};
+        region.bufferOffset                    = 0;
+        region.bufferRowLength                 = 0;
+        region.bufferImageHeight               = 0;
+        region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel       = 0;
+        region.imageSubresource.baseArrayLayer = 0;
+        region.imageSubresource.layerCount     = 1;
+        region.imageOffset                     = {0, 0, 0};
+        region.imageExtent                     = {gBuffer.getSize().width, gBuffer.getSize().height, 1};
 
-      vkCmdCopyImageToBuffer(cmd, gBuffer.getColorImage(colorBufferId), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                             m_readbackBuffer.buffer, 1, &region);
+        vkCmdCopyImageToBuffer(cmd, gBuffer.getColorImage(colorBufferId), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               m_readbackBuffer.buffer, 1, &region);
 
-      nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                        VK_IMAGE_LAYOUT_GENERAL});
-
-      nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId),
-                                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL});
+        nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                          VK_IMAGE_LAYOUT_GENERAL});
+      }
+      else
+      {
+        nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId),
+                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL});
+      }
       nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getDepthImage(),
                                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                         VK_IMAGE_LAYOUT_GENERAL,
@@ -563,10 +595,9 @@ namespace vk_gaussian_splatting
 	void GaussianSplatting::drawSplatPrimitives(VkCommandBuffer cmd, const uint32_t splatCount)
 	{
 		NVVK_DBG_SCOPE(cmd);
-    std::cout << splatCount << std::endl;
 		// Do we need to activate depth test and Write ?
 		bool needDepth = ((prmRaster.sortingMethod != SORTING_GPU_SYNC_RADIX) && prmRender.opacityGaussianDisabled)
-			|| !m_meshSetVk.instances.empty();
+			|| !m_meshSetVk.instances.empty() || m_gltfRasterizer.hasScene();
 
 		// Model transform
 		m_pcRaster.modelMatrix = m_splatSetVk.transform;
@@ -756,8 +787,6 @@ namespace vk_gaussian_splatting
 		m_cameraSet.setHomePreset(m_cameraSet.getCamera());
 		// reset general parameters
 		resetRenderSettings();
-
-		std::cout << m_splatIndices.size() << std::endl;
 
 		m_lightSet.init(m_app, &m_alloc, &m_uploader);
 		// init a new setup

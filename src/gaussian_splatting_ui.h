@@ -114,7 +114,7 @@ public:  // Methods specializing IAppElement
 
   void onUIRender() override;
 
-    void getImage(int cameraIndex);
+  void getImage(int cameraIndex);
 
 private:
 
@@ -172,6 +172,7 @@ private:
   // Project loading
   bool loadingProject = false;
   json data;
+
 
 };
 
