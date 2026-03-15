@@ -146,7 +146,7 @@ void GaussianSplattingUI::onUIRender()
     ImGui::Begin("Viewport");
 
     // Display the G-Buffer image
-    ImGui::Image((ImTextureID)m_gBuffers.getDescriptorSet(), ImGui::GetContentRegionAvail());
+    ImGui::Image((ImTextureID)m_gBuffers[activeCamera].getDescriptorSet(), ImGui::GetContentRegionAvail());
 
     ImVec2 wp = ImGui::GetWindowPos();
     ImVec2 ws = ImGui::GetWindowSize();
@@ -183,7 +183,7 @@ void GaussianSplattingUI::onUIRender()
      && m_plyLoader.getStatus() == PlyLoaderAsync::State::E_READY)
   {
     const std::vector<std::filesystem::path> defaultSearchPaths = getResourcesDirs();
-    prmScene.sceneToLoadFilename = nvutils::findFile("point_cloud.ply", defaultSearchPaths).string();
+    prmScene.sceneToLoadFilename = nvutils::findFile("D:/point_cloud_30000.ply", defaultSearchPaths).string();
     prmScene.enableDefaultScene  = false;
   }
 #endif
@@ -303,6 +303,11 @@ void GaussianSplattingUI::onUIRender()
     }
     ImGui::EndPopup();
   }
+}
+
+void GaussianSplattingUI::getImage(int cameraIndex)
+{
+
 }
 
 bool GaussianSplattingUI::guiGetTransform(glm::vec3& scale,

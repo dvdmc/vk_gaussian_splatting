@@ -64,6 +64,9 @@ int main(int argc, char** argv)
   // Activate the ray tracing extension
   VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtPipelineFeature = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+  VkPhysicalDeviceAccelerationStructureFeaturesKHR accelFeature = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+  vkSetup.deviceExtensions.emplace_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, &accelFeature, true);  // To build acceleration structures
   vkSetup.deviceExtensions.emplace_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, &rtPipelineFeature, false);  // To use vkCmdTraceRaysKHR
   vkSetup.deviceExtensions.emplace_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);  // Required by ray tracing pipeline
   VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR rtPositionFetchFeature = {
@@ -107,6 +110,7 @@ int main(int argc, char** argv)
   appInfo.physicalDevice        = vkContext.getPhysicalDevice();
   appInfo.queues                = vkContext.getQueueInfos();
   appInfo.hasUndockableViewport = true;
+  appInfo.vSync                 = false;
 
   // Initializes the application
   application.init(appInfo);
