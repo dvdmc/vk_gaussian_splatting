@@ -121,8 +121,8 @@ void GaussianSplattingUI::onUIRender()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
     ImGui::Begin("Viewport");
 
-    // Display the G-Buffer image
-    ImGui::Image((ImTextureID)m_gBuffers[activeCamera].getDescriptorSet(), ImGui::GetContentRegionAvail());
+    // Display the G-Buffer image for the current frame-in-flight slot.
+    ImGui::Image((ImTextureID)m_gBuffers[m_app->getFrameCycleIndex()].getDescriptorSet(), ImGui::GetContentRegionAvail());
 
     ImVec2 wp = ImGui::GetWindowPos();
     ImVec2 ws = ImGui::GetWindowSize();
@@ -281,10 +281,6 @@ void GaussianSplattingUI::onUIRender()
 }
 
 
-void GaussianSplattingUI::getImage(int cameraIndex)
-{
-
-}
 
 bool GaussianSplattingUI::guiGetTransform(glm::vec3& scale,
                                           glm::vec3& rotation,

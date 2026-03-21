@@ -87,7 +87,6 @@
 #include "splat_set_vk.h"
 #include "ply_loader_async.h"
 #include "splat_sorter_async.h"
-#include "mesh_set_vk.h"
 #include "light_set_vk.h"
 #include "camera_set.h"
 #include "gltf_rasterizer.h"
@@ -97,10 +96,9 @@ namespace vk_gaussian_splatting
 	class GaussianSplatting
 	{
 	public:
-		// Camera manipulator
-		// public so that it can be accessed by main
+		// Camera manipulator for the interactive display camera.
+		// Public so that it can be accessed by main / ElementCamera.
 		std::shared_ptr<nvutils::CameraManipulator> cameraManip{};
-		std::shared_ptr<nvutils::CameraManipulator> cameraManip2{};
 
 		struct ReadbackBuffer
 		{
@@ -108,10 +106,6 @@ namespace vk_gaussian_splatting
 			VkDeviceMemory memory{VK_NULL_HANDLE};
 			VkDeviceSize   size{0};
 		};
-		
-		std::vector<glm::vec3> cameraPositions = {glm::vec3(10.0f), glm::vec3(10.0f, .0f, .0f) };
-		int                    activeCamera    = 1;
-		std::vector<unsigned char> image;
 
 		// Load a GLTF scene for compositing with splats.
 		// Safe to call after application.addElement() (which invokes onAttach).
@@ -120,6 +114,40 @@ namespace vk_gaussian_splatting
 		// Load an HDR environment map.
 		// Safe to call after application.addElement() (which invokes onAttach).
 		void loadHdr(const std::filesystem::path& path);
+
+		// --- Multi-camera interface ---
+		// All methods below are safe to call from the application thread between frames.
+		// Do NOT call addCamera / removeCamera / setVirtualCameraResolution from a
+		// background thread while onRender is executing.
+
+		// Add a virtual camera with the given pose. Returns its index in the CameraSet
+		// (always >= 1; index 0 is the interactive display camera).
+		// Allocates a per-camera CPU readback buffer at the current virtual resolution.
+		uint64_t addCamera(const Camera& cam);
+
+		// Remove the virtual camera at index (index 0 cannot be removed).
+		// Frees the associated readback buffer. Returns false if index is invalid.
+		bool removeCamera(uint64_t index);
+
+		// Update the pose of virtual camera at index. Returns false if index is invalid.
+		bool setCamera(uint64_t index, const Camera& cam);
+
+		// Read the current pose of camera at index (0 = display camera).
+		Camera getCamera(uint64_t index) const;
+
+		// Total number of cameras including the display camera (index 0).
+		uint64_t getCameraCount() const;
+
+		// Copy the latest rendered image of virtual camera at index into out (RGBA8, row-major).
+		// Thread-safe: acquires a per-camera mutex. Returns false if no image is ready yet
+		// or if index is 0 / out of range.
+		bool getImage(uint64_t index, std::vector<unsigned char>& out);
+
+		// Resolution used for all virtual camera off-screen renders.
+		// Changing this recreates the offscreen GBuffer and all readback buffers.
+		// Default: 640x480.
+		void       setVirtualCameraResolution(VkExtent2D size);
+		VkExtent2D getVirtualCameraResolution() const { return m_virtualCameraResolution; }
 
 	protected:
 		GaussianSplatting();
@@ -157,6 +185,36 @@ namespace vk_gaussian_splatting
 		void deinitScene();
 
 	private:
+		// Per-virtual-camera capture state.
+		// unique_ptr because std::mutex is not movable.
+		struct CameraCapture
+		{
+			ReadbackBuffer             buffer;        // GPU→CPU readback buffer
+			std::vector<unsigned char> image;         // CPU pixels, valid when ready == true
+			bool                       ready = false; // set true at the start of the frame after capture
+			std::mutex                 mutex;         // protects image and ready for ROS thread access
+		};
+
+		// One entry per virtual camera (capture[i] corresponds to cameraSet preset[i+1]).
+		std::vector<std::unique_ptr<CameraCapture>> m_cameraCaptures;
+
+		// Off-screen GBuffer reused for all virtual camera renders each frame.
+		nvvk::GBuffer m_offscreenGBuffer;
+
+		// Resolution of all virtual camera renders (independent of the display window).
+		VkExtent2D m_virtualCameraResolution{640, 480};
+
+		// Upload prmFrame UBO for a virtual camera (view/proj computed from Camera struct).
+		void uploadFrameInfoForCamera(VkCommandBuffer cmd, uint32_t splatCount,
+		                              const Camera& cam, VkExtent2D viewport);
+
+		// At the start of each frame, copy the previous frame's readback buffer
+		// contents into CameraCapture::image under the per-camera mutex.
+		void collectVirtualCameraCaptures();
+
+		// Render all virtual cameras into m_offscreenGBuffer and copy to readback buffers.
+		void renderVirtualCameras(VkCommandBuffer cmd, uint32_t splatCount);
+
 		// init the raster pipelines
 		void initPipelines();
 
@@ -193,7 +251,6 @@ namespace vk_gaussian_splatting
 
 		void drawSplatPrimitives(VkCommandBuffer cmd, const uint32_t splatCount);
 
-		void drawMeshPrimitives(VkCommandBuffer cmd);
 
 		// for statistics display in the UI
 		// copy form m_indirectReadbackHost updated at previous frame to m_indirectReadback
@@ -217,17 +274,13 @@ namespace vk_gaussian_splatting
 		SplatSet m_splatSet = {};
 		// 3DGS/3DGRT model in VRAM
 		SplatSetVk m_splatSetVk = {};
-		// Set of meshes in VRAM
-		MeshSetVk m_meshSetVk = {};
-		// GLTF scene rasterizer (replaces OBJ mesh pipeline)
+		// GLTF scene rasterizer
 		GltfRasterizer m_gltfRasterizer;
 		// Set of lights in RAM and VRAM
 		LightSetVk m_lightSet = {};
 		// Set of cameras in RAM
 		CameraSet m_cameraSet = {};
 
-		// Index of the item selected in a root node of scene graph or -1 if none
-		int64_t m_selectedItemIndex = -1;
 		// Index of the last camera loaded
 		uint64_t m_lastLoadedCamera = 0;
 
@@ -242,12 +295,8 @@ namespace vk_gaussian_splatting
 		bool m_requestUpdateSplatData = false;
 		// trigger a rebuild of the shaders and pipelines at next frame
 		bool m_requestUpdateShaders = false;
-		// trigger the reinit of mesh acceleration structures at next frame
-		bool m_requestUpdateMeshData = false;
 		// trigger the update of light buffer at next frame
 		bool m_requestUpdateLightsBuffer = false;
-		// trigger the deletion of the selected mesh object
-		bool m_requestDeleteSelectedMesh = false;
 
 		nvapp::Application* m_app{nullptr};
 		nvvk::StagingUploader m_uploader{}; // utility to upload buffers to device
@@ -262,8 +311,8 @@ namespace vk_gaussian_splatting
 		VkClearColorValue m_clearColor = {{0.0F, 0.0F, 0.0F, 0.0F}}; // Clear color
 		VkDevice m_device = VK_NULL_HANDLE; // Convenient sortcut to device
 
-		// G-Buffers: 1 color buffer + 1 depth buffer
-		nvvk::GBuffer m_gBuffers[2];
+		// Display G-Buffers (one per frame-in-flight slot; swapchain uses up to 3).
+		nvvk::GBuffer m_gBuffers[3];
 
 		// camera info for current frame, updated by onRender
 		glm::vec3 m_eye{};
@@ -296,8 +345,6 @@ namespace vk_gaussian_splatting
 		// used to load and compile shaders
 		nvslang::SlangCompiler m_slangCompiler{};
 
-		ReadbackBuffer m_readbackBuffer;
-
 		// The different shaders that are used in the pipelines
 		struct Shaders
 		{
@@ -308,9 +355,6 @@ namespace vk_gaussian_splatting
 			VkShaderModule fragmentShader{};
 			VkShaderModule threedgutMeshShader{};
 			VkShaderModule threedgutFragmentShader{};
-			// 3D Meshes raster
-			VkShaderModule meshVertexShader{};
-			VkShaderModule meshFragmentShader{};
 			// Utility storage to process shaders in loop
 			std::vector<VkShaderModule*> modules{};
 			// true if all the shaders are succesfully build
@@ -326,10 +370,7 @@ namespace vk_gaussian_splatting
 		// The graphic pipeline to rasterize gaussian splats using mesh shaders
 		VkPipeline m_graphicsPipeline3dgutMesh = VK_NULL_HANDLE;
 		// The graphic pipeline to rasterize 3DGUT splats using mesh shaders
-		// 3D Meshes Pipelines
-		VkPipeline m_graphicsPipelineMesh = VK_NULL_HANDLE; // The graphic pipeline to rasterize meshes
-
-		// Common to 3D meshes and 3D Gaussians pipeline
+		// Common to 3D Gaussians pipeline
 		VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE; // Raster Pipelines layout
 		VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE; // Descriptor set layout
 		VkDescriptorSet m_descriptorSet = VK_NULL_HANDLE; // Raster Descriptor set

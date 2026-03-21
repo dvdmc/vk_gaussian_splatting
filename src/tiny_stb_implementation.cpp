@@ -17,16 +17,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// tinygltf and stb_image are header-only libraries: each header contains both
+// declarations and definitions, guarded by an implementation macro.  The macro
+// must be defined in exactly one translation unit — if no file defines it you
+// get linker errors; if multiple files define it you get duplicate symbols.
+// This file is that one translation unit.
 //
-// Single-translation-unit compilation of third-party libraries.
-// Defines the implementation macros for tinygltf (glTF loader) and
-// stb_image / stb_image_write (image I/O).
+// TINYGLTF_NO_EXTERNAL_IMAGE suppresses tinygltf's built-in image loading so
+// that nvvkgltf::SceneVk can handle texture upload to the GPU directly.
 //
+// The warning pragmas silence signed/unsigned and size_t truncation warnings
+// in third-party code we do not control.
 
 #define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#define TINYGLTF_NO_EXTERNAL_IMAGE  // Images loaded by SceneVk
+#define TINYGLTF_NO_EXTERNAL_IMAGE
 #pragma warning(push)
 #pragma warning(disable : 4018)  // signed/unsigned mismatch
 #pragma warning(disable : 4267)  // conversion from 'size_t' to 'uint32_t', possible loss of data

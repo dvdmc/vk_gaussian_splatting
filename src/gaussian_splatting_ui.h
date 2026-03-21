@@ -114,8 +114,6 @@ public:  // Methods specializing IAppElement
 
   void onUIRender() override;
 
-  void getImage(int cameraIndex);
-
 private:
 
   bool guiGetTransform(glm::vec3& scale, glm::vec3& rotation, glm::vec3& translation, glm::mat4& transform, glm::mat4& transformInv, bool disabled /*=false*/);

@@ -118,11 +118,21 @@ namespace vk_gaussian_splatting
 
 		// init the Vulkan splatSet and the mesh set for mesh compositing
 		m_splatSetVk.init(m_app, &m_alloc, &m_uploader, &m_sampler, &m_physicalDeviceInfo);
-		m_meshSetVk.init(m_app, &m_alloc, &m_uploader);
 		m_cameraSet.init(cameraManip.get());
 
 		// Initialize the GLTF rasterizer
 		m_gltfRasterizer.init(m_app, &m_alloc, &m_samplerPool, m_colorFormat, m_depthFormat);
+
+		// Off-screen GBuffer for virtual camera renders.
+		m_offscreenGBuffer.init({
+			.allocator    = &m_alloc,
+			.colorFormats = {m_colorFormat},
+			.depthFormat  = m_depthFormat,
+			.imageSampler = m_sampler,
+		});
+		VkCommandBuffer initCmd = m_app->createTempCmdBuffer();
+		NVVK_CHECK(m_offscreenGBuffer.update(initCmd, m_virtualCameraResolution));
+		m_app->submitAndWaitTempCmdBuffer(initCmd);
 	};
 
 	void GaussianSplatting::onDetach()
@@ -135,19 +145,24 @@ namespace vk_gaussian_splatting
 		// release application wide related resources
 		m_gltfRasterizer.deinit();
 		m_splatSetVk.deinit();
-		m_meshSetVk.deinit();
 		for(nvvk::GBuffer& gBuffer : m_gBuffers)
 			gBuffer.deinit();
+		m_offscreenGBuffer.deinit();
 		m_samplerPool.releaseSampler(m_sampler);
 		m_samplerPool.deinit();
 		m_uploader.deinit();
-		m_alloc.deinit();
 
-		if (m_readbackBuffer.buffer)
-			vkDestroyBuffer(m_device, m_readbackBuffer.buffer, nullptr);
-		if (m_readbackBuffer.memory)
-			vkFreeMemory(m_device, m_readbackBuffer.memory, nullptr);
-		m_readbackBuffer = {};
+		// Free per-virtual-camera readback buffers
+		for(auto& capture : m_cameraCaptures)
+		{
+			if(capture->buffer.buffer)
+				vkDestroyBuffer(m_device, capture->buffer.buffer, nullptr);
+			if(capture->buffer.memory)
+				vkFreeMemory(m_device, capture->buffer.memory, nullptr);
+		}
+		m_cameraCaptures.clear();
+
+		m_alloc.deinit();
 	}
 
 	void GaussianSplatting::loadGltfScene(const std::filesystem::path& path)
@@ -167,26 +182,16 @@ namespace vk_gaussian_splatting
 		m_viewSize = {viewportSize.width, viewportSize.height};
 		for(nvvk::GBuffer& gBuffer : m_gBuffers)
 			NVVK_CHECK(gBuffer.update(cmd, viewportSize));
-
 		// (GLTF rasterizer updates its output image descriptor per-frame in draw())
-
-		// destroy old readback buffer
-		if (m_readbackBuffer.buffer)
-			vkDestroyBuffer(m_device, m_readbackBuffer.buffer, nullptr);
-		if (m_readbackBuffer.memory)
-			vkFreeMemory(m_device, m_readbackBuffer.memory, nullptr);
-		m_readbackBuffer = {};
-
-		VkDeviceSize pixelSize = 4; // RGBA8
-		updateReadbackBuffer(m_device, m_app->getPhysicalDevice(),
-		                     VkDeviceSize(viewportSize.width) * viewportSize.height * pixelSize, m_readbackBuffer);
-
 	}
 
 	void GaussianSplatting::onRender(VkCommandBuffer cmd)
   {
     NVVK_DBG_SCOPE(cmd);
 
+    // Copy previous frame's virtual camera readback buffers into CameraCapture::image
+    // (safe here because frame-in-flight sync guarantees the GPU has finished those writes)
+    collectVirtualCameraCaptures();
 
     // update buffers, rebuild shaders and pipelines if needed
     processUpdateRequests();
@@ -203,8 +208,10 @@ namespace vk_gaussian_splatting
     ///////////////////
     // From this point we are using full raster or hybrid.
 
-		for(nvvk::GBuffer& gBuffer : m_gBuffers)
-		{
+    // Use the GBuffer slot matching the current frame-in-flight index.
+    // The swapchain uses up to 3 concurrent frames; each gets its own slot
+    // so no two in-flight frames write the same image simultaneously.
+    nvvk::GBuffer& gBuffer = m_gBuffers[m_app->getFrameCycleIndex()];
 
     // Handle device-host data update and splat sorting if a scene exist
     if(m_shaders.valid && splatCount)
@@ -230,8 +237,8 @@ namespace vk_gaussian_splatting
     uint32_t colorBufferId = 0;
 
     nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getDepthImage(),
-                                      VK_IMAGE_LAYOUT_UNDEFINED,  // or previous
-                                      VK_IMAGE_LAYOUT_GENERAL,    // for ray tracing writes
+                                      VK_IMAGE_LAYOUT_UNDEFINED,  // discard previous content; safe because depth is always cleared before use
+                                      VK_IMAGE_LAYOUT_GENERAL,
                                       {VK_IMAGE_ASPECT_DEPTH_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS}});
 
     // Draw GLTF scene + environment (sky/HDR) before the splat pass.
@@ -292,33 +299,8 @@ namespace vk_gaussian_splatting
 
       vkCmdEndRendering(cmd);
 
-      if(m_readbackBuffer.buffer != VK_NULL_HANDLE)
-      {
-        nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId),
-                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL});
-
-        VkBufferImageCopy region{};
-        region.bufferOffset                    = 0;
-        region.bufferRowLength                 = 0;
-        region.bufferImageHeight               = 0;
-        region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        region.imageSubresource.mipLevel       = 0;
-        region.imageSubresource.baseArrayLayer = 0;
-        region.imageSubresource.layerCount     = 1;
-        region.imageOffset                     = {0, 0, 0};
-        region.imageExtent                     = {gBuffer.getSize().width, gBuffer.getSize().height, 1};
-
-        vkCmdCopyImageToBuffer(cmd, gBuffer.getColorImage(colorBufferId), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               m_readbackBuffer.buffer, 1, &region);
-
-        nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                          VK_IMAGE_LAYOUT_GENERAL});
-      }
-      else
-      {
-        nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId),
-                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL});
-      }
+      nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getColorImage(colorBufferId),
+                                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL});
       nvvk::cmdImageMemoryBarrier(cmd, {gBuffer.getDepthImage(),
                                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                         VK_IMAGE_LAYOUT_GENERAL,
@@ -326,7 +308,10 @@ namespace vk_gaussian_splatting
 
       //vkDeviceWaitIdle(m_device);
     }
-  }
+
+    // Render virtual cameras (indices 1..N) into the offscreen GBuffer and readback.
+    if(m_shaders.valid && splatCount)
+      renderVirtualCameras(cmd, splatCount);
 
 		//
 		readBackIndirectParametersIfNeeded(cmd);
@@ -334,8 +319,7 @@ namespace vk_gaussian_splatting
 
 	void GaussianSplatting::processUpdateRequests(void)
 	{
-		bool needUpdate = m_requestUpdateSplatData || m_requestUpdateMeshData
-			|| m_requestUpdateShaders || m_requestUpdateLightsBuffer || m_requestDeleteSelectedMesh;
+		bool needUpdate = m_requestUpdateSplatData || m_requestUpdateShaders || m_requestUpdateLightsBuffer;
 
 		if (!m_splatSet.size() || !needUpdate)
 			return;
@@ -343,8 +327,7 @@ namespace vk_gaussian_splatting
 		vkDeviceWaitIdle(m_device);
 
 		// updates that requires update of descriptor sets
-		if (m_requestUpdateSplatData || m_requestUpdateMeshData || m_requestUpdateShaders ||
-			m_requestDeleteSelectedMesh)
+		if (m_requestUpdateSplatData || m_requestUpdateShaders)
 		{
 			deinitPipelines();
 			deinitShaders();
@@ -353,17 +336,6 @@ namespace vk_gaussian_splatting
 			{
 				m_splatSetVk.deinitDataStorage();
 				m_splatSetVk.initDataStorage(m_splatSet, prmData.dataStorage, prmData.shFormat);
-			}
-
-			if (m_requestUpdateMeshData || m_requestDeleteSelectedMesh)
-			{
-				if (m_requestDeleteSelectedMesh)
-				{
-					m_meshSetVk.deleteInstance(uint32_t(m_selectedItemIndex));
-					m_selectedItemIndex = -1;
-				}
-
-				m_meshSetVk.updateObjDescriptionBuffer();
 			}
 
 			if (initShaders())
@@ -381,8 +353,7 @@ namespace vk_gaussian_splatting
 		}
 
 		// reset request
-		m_requestUpdateSplatData = m_requestUpdateMeshData = m_requestUpdateShaders =
-			m_requestUpdateLightsBuffer = m_requestDeleteSelectedMesh = false;
+		m_requestUpdateSplatData = m_requestUpdateShaders = m_requestUpdateLightsBuffer = false;
 	}
 
 
@@ -392,7 +363,6 @@ namespace vk_gaussian_splatting
 
 		Camera camera = m_cameraSet.getCamera();
 
-		cameraManip->setEye(cameraPositions[activeCamera]);
 		cameraManip->getLookat(m_eye, m_center, m_up);
 
 		// Update frame parameters uniform buffer
@@ -597,7 +567,7 @@ namespace vk_gaussian_splatting
 		NVVK_DBG_SCOPE(cmd);
 		// Do we need to activate depth test and Write ?
 		bool needDepth = ((prmRaster.sortingMethod != SORTING_GPU_SYNC_RADIX) && prmRender.opacityGaussianDisabled)
-			|| !m_meshSetVk.instances.empty() || m_gltfRasterizer.hasScene();
+			|| m_gltfRasterizer.hasScene();
 
 		// Model transform
 		m_pcRaster.modelMatrix = m_splatSetVk.transform;
@@ -672,37 +642,6 @@ namespace vk_gaussian_splatting
 		}
 	}
 
-	void GaussianSplatting::drawMeshPrimitives(VkCommandBuffer cmd)
-	{
-		NVVK_DBG_SCOPE(cmd);
-
-		VkDeviceSize offset{0};
-
-		// Drawing all triangles
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipelineMesh);
-		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSet, 0,
-		                        nullptr);
-		// overrides the pipeline setup for depth test/write
-		vkCmdSetDepthWriteEnable(cmd, (VkBool32)true);
-		vkCmdSetDepthTestEnable(cmd, (VkBool32)true);
-
-		for (const Instance& inst : m_meshSetVk.instances)
-		{
-			auto& model = m_meshSetVk.meshes[inst.objIndex];
-			m_pcRaster.objIndex = inst.objIndex; // Telling which object is drawn
-			m_pcRaster.modelMatrix = inst.transform;
-			m_pcRaster.modelMatrixInverse = inst.transformInverse;
-
-			vkCmdPushConstants(cmd, m_pipelineLayout,
-			                   VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_VERTEX_BIT |
-			                   VK_SHADER_STAGE_FRAGMENT_BIT,
-			                   0, sizeof(shaderio::PushConstant), &m_pcRaster);
-			vkCmdBindVertexBuffers(cmd, 0, 1, &model.vertexBuffer.buffer, &offset);
-			vkCmdBindIndexBuffer(cmd, model.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-			vkCmdDrawIndexed(cmd, model.nbIndices, 1, 0, 0, 0);
-		}
-	}
-
 	void GaussianSplatting::collectReadBackValuesIfNeeded(void)
 	{
 		if (m_indirectReadbackHost.buffer != VK_NULL_HANDLE && prmRaster.sortingMethod == SORTING_GPU_SYNC_RADIX &&
@@ -712,23 +651,6 @@ namespace vk_gaussian_splatting
 			            sizeof(shaderio::IndirectParams));
 		}
 
-		//void* data = nullptr;
-	 //   vkMapMemory(m_device, m_readbackBuffer.memory, 0, VK_WHOLE_SIZE, 0, &data);
-
-	 //   const int width  = int(m_gBuffers[activeCamera].getSize().width);
-		//const int height = int(m_gBuffers[activeCamera].getSize().height);
-	 //   const int comp   = 4;             // RGBA8
-	 //   const int stride = width * comp;  // tightly packed because bufferRowLength = 0
-
-	 //   static unsigned char* rgba = reinterpret_cast<unsigned char*>(data);
-
-		//image = std::vector<unsigned char>(width * height * comp);
-  //    //memcpy(image.data(), rgba, width * height * comp);
-
-	 //   // Save as PNG
-  //    //stbi_write_png("capture.png", width, height, comp, image.data(), stride);
-
-	 //   vkUnmapMemory(m_device, m_readbackBuffer.memory);
 	}
 
 	void GaussianSplatting::readBackIndirectParametersIfNeeded(VkCommandBuffer cmd)
@@ -762,7 +684,6 @@ namespace vk_gaussian_splatting
 		deinitScene();
 		m_splatSetVk.resetTransform();
 		m_splatSetVk.deinitDataStorage();
-		m_meshSetVk.deinitDataStorage();
 		m_lightSet.deinit();
 		m_cameraSet.deinit();
 		deinitShaders();
@@ -891,10 +812,6 @@ namespace vk_gaussian_splatting
 		// 3DGUT raster
 		success &= compileSlangShader("threedgut_raster.mesh.slang", m_shaders.threedgutMeshShader);
 		success &= compileSlangShader("threedgut_raster.frag.slang", m_shaders.threedgutFragmentShader);
-		// Mesh raster
-		success &= compileSlangShader("threedmesh_raster.vert.slang", m_shaders.meshVertexShader);
-		success &= compileSlangShader("threedmesh_raster.frag.slang", m_shaders.meshFragmentShader);
-
 		if (!success)
 			return (m_shaders.valid = false);
 
@@ -1018,8 +935,6 @@ namespace vk_gaussian_splatting
 			bindings.addBinding(BINDING_SH_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL);
 		}
 
-		// Obj Mesh objectDescriptions
-		bindings.addBinding(BINDING_MESH_DESCRIPTORS, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL);
 		bindings.addBinding(BINDING_LIGHT_SET, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL);
 
 		//
@@ -1106,12 +1021,6 @@ namespace vk_gaussian_splatting
 			if (m_splatSetVk.sphericalHarmonicsBuffer.buffer != NULL)
 				writeContainer.append(bindings.getWriteSet(BINDING_SH_BUFFER, m_descriptorSet),
 				                      m_splatSetVk.sphericalHarmonicsBuffer);
-		}
-
-		if (m_meshSetVk.instances.size())
-		{
-			writeContainer.append(bindings.getWriteSet(BINDING_MESH_DESCRIPTORS, m_descriptorSet),
-			                      m_meshSetVk.objectDescriptionsBuffer.buffer);
 		}
 
 		if (m_lightSet.size())
@@ -1245,67 +1154,7 @@ namespace vk_gaussian_splatting
 				NVVK_DBG_NAME(m_graphicsPipelineGsVert);
 			}
 		}
-		// Create the 3D mesh rasterization pipeline
-		{
-			// Preparing the pipeline states
-			nvvk::GraphicsPipelineState pipelineState;
-			pipelineState.rasterizationState.cullMode = VK_CULL_MODE_NONE;
-
-			// deactivates blending and set blend func
-			pipelineState.colorBlendEnables[0] = VK_FALSE;
-			pipelineState.colorBlendEquations[0].alphaBlendOp = VK_BLEND_OP_ADD;
-			pipelineState.colorBlendEquations[0].colorBlendOp = VK_BLEND_OP_ADD;
-			pipelineState.colorBlendEquations[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-			pipelineState.colorBlendEquations[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-			pipelineState.colorBlendEquations[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-			pipelineState.colorBlendEquations[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-
-			// TODOC
-			pipelineState.rasterizationState.cullMode = VK_CULL_MODE_NONE;
-			pipelineState.depthStencilState.depthWriteEnable = VK_TRUE;
-			pipelineState.depthStencilState.depthTestEnable = VK_TRUE;
-
-			// create the pipeline
-			const auto BINDING_ATTR_VERTEX = 0;
-
-			pipelineState.vertexBindings = {
-				{
-					// 3 pos and 3 nrm per vertex
-					.binding = BINDING_ATTR_VERTEX,
-					.stride = 6 * sizeof(float),
-					.divisor = 1
-				}
-			};
-			pipelineState.vertexAttributes = {
-				{
-					.location = ATTRIBUTE_LOC_MESH_POSITION,
-					.binding = BINDING_ATTR_VERTEX,
-					.format = VK_FORMAT_R32G32B32_SFLOAT,
-					.offset = static_cast<uint32_t>(offsetof(ObjVertex, pos))
-				},
-				{
-					.location = ATTRIBUTE_LOC_MESH_NORMAL,
-					.binding = BINDING_ATTR_VERTEX,
-					.format = VK_FORMAT_R32G32B32_SFLOAT,
-					.offset = static_cast<uint32_t>(offsetof(ObjVertex, nrm))
-				}
-			};
-
-			nvvk::GraphicsPipelineCreator creator;
-			creator.pipelineInfo.layout = m_pipelineLayout;
-			creator.colorFormats = {m_colorFormat};
-			creator.renderingState.depthAttachmentFormat = m_depthFormat;
-			// The dynamic state is used to change the depth test state dynamically
-			creator.dynamicStateValues.push_back(VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE);
-			creator.dynamicStateValues.push_back(VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE);
-
-			creator.addShader(VK_SHADER_STAGE_VERTEX_BIT, "main", m_shaders.meshVertexShader);
-			creator.addShader(VK_SHADER_STAGE_FRAGMENT_BIT, "main", m_shaders.meshFragmentShader);
-
-			creator.createGraphicsPipeline(m_device, nullptr, pipelineState, &m_graphicsPipelineMesh);
-			NVVK_DBG_NAME(m_graphicsPipelineMesh);
 		}
-	}
 
 	void GaussianSplatting::deinitPipelines()
 	{
@@ -1318,7 +1167,6 @@ namespace vk_gaussian_splatting
 		                       vkDestroyPipeline(m_device, m_graphicsPipelineGsMesh, nullptr));
 		TEST_DESTROY_AND_RESET(m_graphicsPipeline3dgutMesh,
 		                       vkDestroyPipeline(m_device, m_graphicsPipeline3dgutMesh, nullptr));
-		TEST_DESTROY_AND_RESET(m_graphicsPipelineMesh, vkDestroyPipeline(m_device, m_graphicsPipelineMesh, nullptr));
 		TEST_DESTROY_AND_RESET(m_computePipelineGsDistCull,
 		                       vkDestroyPipeline(m_device, m_computePipelineGsDistCull, nullptr));
 
@@ -1442,6 +1290,282 @@ namespace vk_gaussian_splatting
 		m_alloc.destroyBuffer(m_quadIndices);
 
 		m_alloc.destroyBuffer(m_frameInfoBuffer);
+	}
+
+	// ---------------------------------------------------------------------------
+	// Multi-camera interface
+	// ---------------------------------------------------------------------------
+
+	uint64_t GaussianSplatting::addCamera(const Camera& cam)
+	{
+		uint64_t index = m_cameraSet.createPreset(cam);
+		// Ensure m_cameraCaptures has one entry per virtual camera (preset indices 1..N).
+		size_t needed = m_cameraSet.size() - 1;
+		while(m_cameraCaptures.size() < needed)
+		{
+			m_cameraCaptures.push_back(std::make_unique<CameraCapture>());
+			VkDeviceSize bufSize = VkDeviceSize(m_virtualCameraResolution.width)
+			                       * m_virtualCameraResolution.height * 4;
+			if(bufSize > 0 && m_device != VK_NULL_HANDLE)
+				updateReadbackBuffer(m_device, m_app->getPhysicalDevice(), bufSize,
+				                     m_cameraCaptures.back()->buffer);
+		}
+		return index;
+	}
+
+	bool GaussianSplatting::removeCamera(uint64_t index)
+	{
+		if(!m_cameraSet.erasePreset(index))
+			return false;
+		size_t captureIdx = index - 1;
+		if(captureIdx < m_cameraCaptures.size())
+		{
+			auto& cap = *m_cameraCaptures[captureIdx];
+			if(cap.buffer.buffer)
+				vkDestroyBuffer(m_device, cap.buffer.buffer, nullptr);
+			if(cap.buffer.memory)
+				vkFreeMemory(m_device, cap.buffer.memory, nullptr);
+			m_cameraCaptures.erase(m_cameraCaptures.begin() + captureIdx);
+		}
+		return true;
+	}
+
+	bool GaussianSplatting::setCamera(uint64_t index, const Camera& cam)
+	{
+		return m_cameraSet.setPreset(index, cam);
+	}
+
+	Camera GaussianSplatting::getCamera(uint64_t index) const
+	{
+		return m_cameraSet.getPreset(index);
+	}
+
+	uint64_t GaussianSplatting::getCameraCount() const
+	{
+		return m_cameraSet.size();
+	}
+
+	bool GaussianSplatting::getImage(uint64_t index, std::vector<unsigned char>& out)
+	{
+		if(index == 0 || index > m_cameraCaptures.size())
+			return false;
+		auto& capture = *m_cameraCaptures[index - 1];
+		std::lock_guard<std::mutex> lock(capture.mutex);
+		if(!capture.ready)
+			return false;
+		out = capture.image;
+		return true;
+	}
+
+	void GaussianSplatting::setVirtualCameraResolution(VkExtent2D size)
+	{
+		if(size.width == m_virtualCameraResolution.width
+		   && size.height == m_virtualCameraResolution.height)
+			return;
+
+		vkDeviceWaitIdle(m_device);
+		m_virtualCameraResolution = size;
+
+		VkCommandBuffer cmd = m_app->createTempCmdBuffer();
+		NVVK_CHECK(m_offscreenGBuffer.update(cmd, size));
+		m_app->submitAndWaitTempCmdBuffer(cmd);
+
+		VkDeviceSize bufSize = VkDeviceSize(size.width) * size.height * 4;
+		for(auto& capture : m_cameraCaptures)
+		{
+			if(capture->buffer.buffer)
+				vkDestroyBuffer(m_device, capture->buffer.buffer, nullptr);
+			if(capture->buffer.memory)
+				vkFreeMemory(m_device, capture->buffer.memory, nullptr);
+			capture->buffer = {};
+			if(bufSize > 0)
+				updateReadbackBuffer(m_device, m_app->getPhysicalDevice(), bufSize,
+				                     capture->buffer);
+		}
+	}
+
+	// ---------------------------------------------------------------------------
+	// Private multi-camera helpers
+	// ---------------------------------------------------------------------------
+
+	void GaussianSplatting::collectVirtualCameraCaptures()
+	{
+		for(auto& capture : m_cameraCaptures)
+		{
+			if(capture->buffer.buffer == VK_NULL_HANDLE || capture->buffer.size == 0)
+				continue;
+			void* ptr = nullptr;
+			vkMapMemory(m_device, capture->buffer.memory, 0, capture->buffer.size, 0, &ptr);
+			if(ptr)
+			{
+				std::lock_guard<std::mutex> lock(capture->mutex);
+				capture->image.resize(capture->buffer.size);
+				memcpy(capture->image.data(), ptr, capture->buffer.size);
+				capture->ready = true;
+				vkUnmapMemory(m_device, capture->buffer.memory);
+			}
+		}
+	}
+
+	void GaussianSplatting::uploadFrameInfoForCamera(VkCommandBuffer cmd, uint32_t splatCount,
+	                                                  const Camera& cam, VkExtent2D viewport)
+	{
+		m_eye    = cam.eye;
+		m_center = cam.ctr;
+		m_up     = cam.up;
+
+		const float fovRad = glm::radians(cam.fov);
+		const float aspect = float(viewport.width) / float(viewport.height);
+
+		const glm::mat4 viewMatrix = glm::lookAt(cam.eye, cam.ctr, cam.up);
+		const glm::mat4 projMatrix = glm::perspective(fovRad, aspect, cam.clip.x, cam.clip.y);
+
+		prmFrame.splatCount      = splatCount;
+		prmFrame.lightCount      = int32_t(m_lightSet.size());
+		prmFrame.cameraPosition  = m_eye;
+		prmFrame.viewMatrix      = viewMatrix;
+		prmFrame.viewInverse     = glm::inverse(viewMatrix);
+		prmFrame.fovRad          = fovRad;
+		prmFrame.nearFar         = cam.clip;
+		prmFrame.projectionMatrix = projMatrix;
+		prmFrame.projInverse     = glm::inverse(projMatrix);
+
+		prmFrame.orthoZoom           = 1.0f;
+		prmFrame.orthographicMode    = 0;
+		prmFrame.viewport            = glm::vec2(viewport.width, viewport.height);
+		prmFrame.basisViewport       = glm::vec2(1.0f / viewport.width, 1.0f / viewport.height);
+		prmFrame.inverseFocalAdjustment = 1.0f;
+
+		// Pinhole focal lengths
+		prmFrame.focal = glm::vec2(projMatrix[0][0] * 0.5f * viewport.width,
+		                           projMatrix[1][1] * 0.5f * viewport.height);
+
+		// Camera pose for unscented transform
+		prmFrame.viewTrans = viewMatrix[3];
+		const glm::quat viewQuat = glm::quat_cast(viewMatrix);
+		prmFrame.viewQuat = glm::vec4(viewQuat.x, viewQuat.y, viewQuat.z, viewQuat.w);
+
+		prmFrame.focusDist = cam.focusDist;
+		prmFrame.aperture  = cam.aperture;
+
+		vkCmdUpdateBuffer(cmd, m_frameInfoBuffer.buffer, 0, sizeof(shaderio::FrameInfo), &prmFrame);
+
+		VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+		barrier.srcAccessMask   = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask   = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT;
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+		                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT
+		                         | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,
+		                     0, 1, &barrier, 0, nullptr, 0, nullptr);
+	}
+
+	void GaussianSplatting::renderVirtualCameras(VkCommandBuffer cmd, uint32_t splatCount)
+	{
+		if(m_cameraCaptures.empty())
+			return;
+
+		// Virtual cameras always use GPU sort. Warn once if the user had CPU sort selected.
+		if(prmRaster.sortingMethod != SORTING_GPU_SYNC_RADIX)
+			LOGW("Virtual cameras require GPU sort; CPU sort will not be used for virtual camera passes.\n");
+
+		const uint32_t colorId = 0;
+
+		for(size_t i = 0; i < m_cameraCaptures.size(); i++)
+		{
+			// preset index i+1 (preset[0] is the interactive display camera)
+			const Camera cam = m_cameraSet.getPreset(uint64_t(i + 1));
+
+			// Build view/proj for this camera
+			const float     fovRad = glm::radians(cam.fov);
+			const float     aspect = float(m_virtualCameraResolution.width)
+			                         / float(m_virtualCameraResolution.height);
+			const glm::mat4 view   = glm::lookAt(cam.eye, cam.ctr, cam.up);
+			const glm::mat4 proj   = glm::perspective(fovRad, aspect, cam.clip.x, cam.clip.y);
+
+			// 1. Upload frame UBO for this camera (also sets m_eye/m_center used by sort)
+			uploadFrameInfoForCamera(cmd, splatCount, cam, m_virtualCameraResolution);
+
+			// 2. GPU sort for this camera's viewpoint
+			processSortingOnGPU(cmd, splatCount);
+
+			// 3. Discard previous depth; both images start in GENERAL
+			nvvk::cmdImageMemoryBarrier(cmd, {m_offscreenGBuffer.getDepthImage(),
+			                                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+			                                  {VK_IMAGE_ASPECT_DEPTH_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS}});
+
+			// 4. GLTF pass (sky/HDR + mesh geometry) — enters/exits GENERAL
+			m_gltfRasterizer.draw(cmd, m_virtualCameraResolution,
+			                      m_offscreenGBuffer.getColorImage(colorId),
+			                      m_offscreenGBuffer.getColorImageView(colorId),
+			                      m_offscreenGBuffer.getDepthImage(),
+			                      m_offscreenGBuffer.getDepthImageView(),
+			                      view, proj);
+
+			// 5. Splat pass — LOAD over GLTF result
+			{
+				nvvk::cmdImageMemoryBarrier(cmd, {m_offscreenGBuffer.getColorImage(colorId),
+				                                  VK_IMAGE_LAYOUT_GENERAL,
+				                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+				nvvk::cmdImageMemoryBarrier(cmd, {m_offscreenGBuffer.getDepthImage(),
+				                                  VK_IMAGE_LAYOUT_GENERAL,
+				                                  VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+				                                  {VK_IMAGE_ASPECT_DEPTH_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS}});
+
+				VkRenderingAttachmentInfo colorAttachment = DEFAULT_VkRenderingAttachmentInfo;
+				colorAttachment.imageView                 = m_offscreenGBuffer.getColorImageView(colorId);
+				colorAttachment.loadOp                    = VK_ATTACHMENT_LOAD_OP_LOAD;
+
+				VkRenderingAttachmentInfo depthAttachment = DEFAULT_VkRenderingAttachmentInfo;
+				depthAttachment.imageView                 = m_offscreenGBuffer.getDepthImageView();
+				depthAttachment.clearValue                = {.depthStencil = DEFAULT_VkClearDepthStencilValue};
+				if(m_gltfRasterizer.hasScene())
+					depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+
+				VkRenderingInfo renderingInfo      = DEFAULT_VkRenderingInfo;
+				renderingInfo.renderArea           = DEFAULT_VkRect2D(m_virtualCameraResolution);
+				renderingInfo.colorAttachmentCount = 1;
+				renderingInfo.pColorAttachments    = &colorAttachment;
+				renderingInfo.pDepthAttachment     = &depthAttachment;
+
+				vkCmdBeginRendering(cmd, &renderingInfo);
+
+				const VkViewport viewport{0.f, 0.f, float(m_virtualCameraResolution.width),
+				                          float(m_virtualCameraResolution.height), 0.f, 1.f};
+				const VkRect2D scissor{{0, 0}, m_virtualCameraResolution};
+				vkCmdSetViewportWithCount(cmd, 1, &viewport);
+				vkCmdSetScissorWithCount(cmd, 1, &scissor);
+
+				drawSplatPrimitives(cmd, splatCount);
+				vkCmdEndRendering(cmd);
+			}
+
+			// 6. Readback: COLOR_ATTACHMENT → TRANSFER_SRC, copy, → GENERAL
+			nvvk::cmdImageMemoryBarrier(cmd, {m_offscreenGBuffer.getColorImage(colorId),
+			                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			                                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL});
+
+			CameraCapture& capture = *m_cameraCaptures[i];
+			if(capture.buffer.buffer != VK_NULL_HANDLE)
+			{
+				VkBufferImageCopy region{};
+				region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+				region.imageSubresource.layerCount = 1;
+				region.imageExtent = {m_virtualCameraResolution.width,
+				                      m_virtualCameraResolution.height, 1};
+				vkCmdCopyImageToBuffer(cmd, m_offscreenGBuffer.getColorImage(colorId),
+				                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				                       capture.buffer.buffer, 1, &region);
+			}
+
+			// Depth still in DEPTH_ATTACHMENT — transition back to GENERAL
+			nvvk::cmdImageMemoryBarrier(cmd, {m_offscreenGBuffer.getColorImage(colorId),
+			                                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			                                  VK_IMAGE_LAYOUT_GENERAL});
+			nvvk::cmdImageMemoryBarrier(cmd, {m_offscreenGBuffer.getDepthImage(),
+			                                  VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+			                                  VK_IMAGE_LAYOUT_GENERAL,
+			                                  {VK_IMAGE_ASPECT_DEPTH_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS}});
+		}
 	}
 
 } // namespace vk_gaussian_splatting
