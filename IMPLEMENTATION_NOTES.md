@@ -82,7 +82,7 @@ Five pipeline objects are created at startup:
 | `m_graphicsPipelineGsMesh` | Mesh shader path for 3DGS gaussian splats |
 | `m_graphicsPipeline3dgutMesh` | Mesh shader path for 3DGUT gaussian splats |
 | `m_graphicsPipelineGsVert` | Vertex shader fallback for 3DGS splats |
-| `m_graphicsPipelineMesh` | Legacy rasterization pipeline (retained for non-GLTF meshes) |
+| `m_graphicsPipelineMesh` | Legacy rasterization pipeline (retained for non-GLTF meshes, NOW REMOVED) |
 
 All blend equations, cull modes, and vertex input formats are **baked in** at creation time.
 The only dynamic state used is `VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE` and

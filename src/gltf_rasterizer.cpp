@@ -235,10 +235,9 @@ void GltfRasterizer::draw(VkCommandBuffer  cmd,
   nvvk::cmdImageMemoryBarrier(cmd, {depthImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                     {VK_IMAGE_ASPECT_DEPTH_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS}});
 
-  // Color load op: LOAD if sky/HDR already rendered, CLEAR if solid background
   VkRenderingAttachmentInfo colorAttachment = DEFAULT_VkRenderingAttachmentInfo;
   colorAttachment.imageView                 = colorImageView;
-  colorAttachment.loadOp = useSolidBackground ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+  colorAttachment.loadOp     = useSolidBackground ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
   colorAttachment.clearValue = {{{backgroundColor.x, backgroundColor.y, backgroundColor.z, 0.f}}};
 
   VkRenderingAttachmentInfo depthAttachment = DEFAULT_VkRenderingAttachmentInfo;
